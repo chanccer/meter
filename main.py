@@ -28,7 +28,7 @@ if sys.platform == "win32":
 import numpy as np
 import pandas as pd
 from scipy.interpolate import RegularGridInterpolator
-from scipy.optimize import brentq
+from scipy.optimize import brentq, curve_fit
 
 import serial
 import serial.tools.list_ports
@@ -67,6 +67,13 @@ PID_TIMEOUT_S       = 30.0         # 最长等待时间 s
 PID_SAMPLE_AVG      = 20           # 每次 PID 迭代平均采样帧数
 PID_LOOP_INTERVAL   = 0.05         # 目标循环间隔 s
 PID_INTEGRAL_LIMIT  = 0.5          # 积分项最大贡献 V（抗积分饱和）
+
+# 自动整定参数（--autotune）
+AUTOTUNE_V_LOW      = 0.5          # 阶跃测试起始电压 V
+AUTOTUNE_V_HIGH     = 2.5          # 阶跃测试终止电压 V
+AUTOTUNE_COLLECT_S  = 3.0          # 阶跃响应采集时长 s
+AUTOTUNE_METHOD     = "IMC"        # 整定方法：'IMC'（推荐）或 'ZN'
+AUTOTUNE_LAMBDA     = 1.0          # IMC 闭环时间常数倍数（越大越保守）
 
 # ============================================================
 # 内部常量
@@ -107,6 +114,11 @@ class Config:
     pid_sample_avg: int = PID_SAMPLE_AVG
     pid_loop_interval: float = PID_LOOP_INTERVAL
     pid_integral_limit: float = PID_INTEGRAL_LIMIT
+    autotune_v_low: float = AUTOTUNE_V_LOW
+    autotune_v_high: float = AUTOTUNE_V_HIGH
+    autotune_collect_s: float = AUTOTUNE_COLLECT_S
+    autotune_method: str = AUTOTUNE_METHOD
+    autotune_lambda: float = AUTOTUNE_LAMBDA
 
     @property
     def nm_per_count(self) -> int:
@@ -388,6 +400,27 @@ class UMD2Reader:
 
         return samples
 
+    def read_displacement_timed(
+        self, duration_s: float
+    ) -> tuple[list[float], list[float]]:
+        """采集 duration_s 秒内的带时间戳位移数据，用于阶跃响应辨识。"""
+        nm_per_count = self._cfg.nm_per_count
+        times: list[float] = []
+        samples: list[float] = []
+        t_start = time.monotonic()
+        deadline = t_start + duration_s
+        while time.monotonic() < deadline:
+            try:
+                line = self._queue.get(timeout=0.005)
+            except queue.Empty:
+                continue
+            parsed = self._parse_line(line)
+            if parsed:
+                disp_count, _, _ = parsed
+                times.append(time.monotonic() - t_start)
+                samples.append(float(disp_count) * nm_per_count)
+        return times, samples
+
     def read_temperature(self, timeout: float = 2.0) -> Optional[float]:
         """从低速帧（code 3）读取当前温度（°C）。"""
         deadline = time.monotonic() + timeout
@@ -425,6 +458,7 @@ class DryRunUMD2Reader(UMD2Reader):
         self._cfg = cfg
         self._log = logger
         self._current_voltage: float = 0.0
+        self._prev_voltage: float = 0.0
         self.device_info = DeviceInfo(
             firmware_version="1.26",
             sample_rate_hz=1000,
@@ -455,7 +489,25 @@ class DryRunUMD2Reader(UMD2Reader):
 
     def set_voltage_hint(self, v: float) -> None:
         """供 DryRunMokuController 调用，同步当前电压状态到模拟位移。"""
+        self._prev_voltage = self._current_voltage
         self._current_voltage = v
+
+    def read_displacement_timed(
+        self, duration_s: float
+    ) -> tuple[list[float], list[float]]:
+        """模拟一阶阶跃响应：K=410nm/V, τ=80ms, θ=10ms，加 5nm 噪声。"""
+        K, tau, theta = 410.0, 0.08, 0.01
+        y0 = getattr(self, "_prev_voltage", self._current_voltage) * K
+        y_inf = self._current_voltage * K
+        delta_nm = y_inf - y0
+        dt = 0.001
+        n = max(int(duration_s / dt), 1)
+        t = np.arange(n, dtype=float) * dt
+        resp = np.where(t > theta,
+                        y0 + delta_nm * (1.0 - np.exp(-(t - theta) / tau)),
+                        y0)
+        resp += np.random.normal(0.0, 5.0, n)
+        return list(t), list(resp)
 
     def close(self) -> None:
         pass
@@ -1096,6 +1148,177 @@ class PIDController:
         return self.kp * error_nm + i_contribution + d_contribution
 
 
+# ============================================================
+# PID 自动整定
+# ============================================================
+
+
+@dataclass
+class AutoTuneResult:
+    """阶跃响应辨识与 PID 自动整定结果。"""
+
+    success: bool
+    message: str
+    K_nm_per_V: float = 0.0    # 静态增益 nm/V
+    tau_s: float = 0.0          # 时间常数 s
+    theta_s: float = 0.0        # 纯滞后 s
+    kp: float = 0.0             # 整定 Kp V/nm
+    ki: float = 0.0             # 整定 Ki V/(nm·s)
+    method: str = ""
+
+
+class AutoTuner:
+    """
+    基于阶跃响应辨识的 PID 自动整定器。
+
+    流程：
+    1. 施加电压阶跃，采集带时间戳的位移响应
+    2. 拟合一阶加纯滞后（FOPDT）模型：G(s) = K·e^(-θs)/(τs+1)
+    3. 按 IMC 或 Ziegler-Nichols 规则计算 Kp、Ki
+    """
+
+    def __init__(
+        self,
+        cfg: Config,
+        umd2: UMD2Reader,
+        moku: MokuController,
+        logger: logging.Logger,
+    ) -> None:
+        self._cfg = cfg
+        self._umd2 = umd2
+        self._moku = moku
+        self._log = logger
+
+    def run(self) -> AutoTuneResult:
+        cfg = self._cfg
+        ch = cfg.moku_channel
+        v_low, v_high = cfg.autotune_v_low, cfg.autotune_v_high
+        delta_v = v_high - v_low
+
+        if abs(delta_v) < 0.1:
+            return AutoTuneResult(False, "阶跃幅度过小（< 0.1V），请检查 AUTOTUNE_V_LOW/HIGH")
+
+        print(f"\n{'=' * 40}")
+        print("PID 自动整定（阶跃响应法）")
+        print(f"{'=' * 40}")
+        print(f"阶跃：{v_low:.2f}V → {v_high:.2f}V  (ΔV={delta_v:+.2f}V)")
+        print(f"采集：{cfg.autotune_collect_s:.1f}s  方法：{cfg.autotune_method}")
+
+        # ── 步骤 1：稳定到低电压 ──────────────────────────────
+        print("\n[1/4] 稳定至初始电压…")
+        self._moku.set_voltage(ch, v_low)
+        time.sleep(max(cfg.settle_time * 6, 2.0))
+        self._umd2.flush_queue()
+        pre = self._umd2.read_displacement(50)
+        y0 = float(np.mean(pre)) if pre else 0.0
+        self._log.info(f"[AutoTune] 初始位移 y0={y0:.1f}nm")
+
+        # ── 步骤 2：施加阶跃，采集响应 ───────────────────────
+        print(f"[2/4] 施加阶跃，采集 {cfg.autotune_collect_s:.1f}s 响应…")
+        self._moku.set_voltage(ch, v_high)
+        t_arr, d_arr = self._umd2.read_displacement_timed(cfg.autotune_collect_s)
+
+        if len(t_arr) < 30:
+            self._moku.set_voltage(ch, v_low)
+            return AutoTuneResult(False, f"采集数据不足（{len(t_arr)} 帧），请检查 µMD2 连接")
+
+        t_np = np.array(t_arr)
+        d_np = np.array(d_arr)
+        self._log.info(f"[AutoTune] 采集 {len(t_arr)} 帧，末段均值={np.mean(d_np[-20:]):.1f}nm")
+
+        # ── 步骤 3：拟合 FOPDT 模型 ──────────────────────────
+        print("[3/4] 拟合 FOPDT 模型…")
+        try:
+            K, tau, theta = self._fit_fopdt(t_np, d_np, y0, delta_v)
+        except Exception as e:
+            self._moku.set_voltage(ch, v_low)
+            return AutoTuneResult(False, f"模型拟合失败: {e}")
+
+        if K <= 0 or tau <= 0:
+            self._moku.set_voltage(ch, v_low)
+            return AutoTuneResult(False, f"拟合结果异常 K={K:.1f} τ={tau:.4f}")
+
+        # ── 步骤 4：计算增益 ──────────────────────────────────
+        print("[4/4] 计算 PID 增益…")
+        if cfg.autotune_method.upper() == "ZN":
+            kp, ki = self._gains_zn(K, tau, theta)
+        else:
+            kp, ki = self._gains_imc(K, tau, theta, cfg.autotune_lambda)
+
+        # 归回低电压
+        self._moku.set_voltage(ch, v_low)
+        time.sleep(cfg.settle_time)
+
+        result = AutoTuneResult(
+            success=True, message="整定成功",
+            K_nm_per_V=K, tau_s=tau, theta_s=theta,
+            kp=kp, ki=ki, method=cfg.autotune_method.upper(),
+        )
+        self._print_result(result)
+        return result
+
+    # ── 内部方法 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _fopdt_model(
+        t: np.ndarray, K: float, tau: float, theta: float, y0: float, delta_v: float
+    ) -> np.ndarray:
+        tau = max(tau, 1e-6)
+        return np.where(
+            t > theta,
+            y0 + K * delta_v * (1.0 - np.exp(-(t - theta) / tau)),
+            y0,
+        )
+
+    def _fit_fopdt(
+        self, t: np.ndarray, d: np.ndarray, y0: float, delta_v: float
+    ) -> tuple[float, float, float]:
+        y_inf_est = float(np.mean(d[max(len(d) - max(len(d) // 5, 10), 0):]))
+        K0 = (y_inf_est - y0) / delta_v if abs(delta_v) > 0.01 else 410.0
+        tau0 = float(t[-1]) / 4.0
+        theta0 = min(0.02, float(t[-1]) / 10.0)
+
+        def model(t_arr: np.ndarray, K: float, tau: float, theta: float) -> np.ndarray:
+            return self._fopdt_model(t_arr, K, tau, theta, y0, delta_v)
+
+        popt, _ = curve_fit(
+            model, t, d,
+            p0=[K0, tau0, theta0],
+            bounds=([1.0, 1e-4, 0.0], [5000.0, 60.0, 10.0]),
+            maxfev=8000,
+        )
+        return float(popt[0]), float(popt[1]), float(popt[2])
+
+    def _gains_imc(
+        self, K: float, tau: float, theta: float, lam_factor: float
+    ) -> tuple[float, float]:
+        lam = max(lam_factor * tau, theta * 0.5, 1e-4)
+        kp = tau / (K * (lam + theta))
+        ki = kp / tau
+        return kp, ki
+
+    @staticmethod
+    def _gains_zn(K: float, tau: float, theta: float) -> tuple[float, float]:
+        theta = max(theta, 1e-4)
+        kp = 0.9 * tau / (K * theta)
+        ki = kp / (3.33 * theta)
+        return kp, ki
+
+    @staticmethod
+    def _print_result(r: AutoTuneResult) -> None:
+        print(f"\n{'─' * 40}")
+        print("模型识别结果（FOPDT）：")
+        print(f"  增益     K  = {r.K_nm_per_V:.1f} nm/V")
+        print(f"  时间常数 τ  = {r.tau_s * 1000:.1f} ms")
+        print(f"  纯滞后   θ  = {r.theta_s * 1000:.1f} ms")
+        print(f"\n整定结果（{r.method}）：")
+        print(f"  Kp = {r.kp:.6f} V/nm")
+        print(f"  Ki = {r.ki:.6f} V/(nm·s)")
+        print(f"  Kd = 0.0  （保持关闭）")
+        print(f"\n如需永久保存，请将以上值写入 main.py 顶部配置。")
+        print(f"{'─' * 40}")
+
+
 def run_pid_control(
     target_nm: float,
     cfg: Config,
@@ -1290,8 +1513,9 @@ def _pid_mode(
     temperature_C: float,
     lut_path: Optional[str],
     cfg: Config,
+    do_autotune: bool = False,
 ) -> None:
-    """PID 闭环定位模式：连接设备，驱动 Piezo 到达目标位移后保持。"""
+    """PID 闭环定位模式：连接设备，可选自动整定，驱动 Piezo 到达目标位移后保持。"""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     logger = setup_logging(cfg.output_dir, ts)
 
@@ -1318,6 +1542,22 @@ def _pid_mode(
         moku.connect()
         print(f"[设备] Moku:Go: {cfg.moku_ip}")
 
+        # ── 自动整定（可选）────────────────────────────────────
+        if do_autotune:
+            tuner = AutoTuner(cfg, umd2, moku, logger)
+            tune_result = tuner.run()
+            if tune_result.success:
+                cfg.pid_kp = tune_result.kp
+                cfg.pid_ki = tune_result.ki
+                logger.info(
+                    f"[AutoTune] 应用增益 Kp={tune_result.kp:.6f} Ki={tune_result.ki:.6f}"
+                )
+                print(f"[自动整定] 已应用 Kp={tune_result.kp:.6f}  Ki={tune_result.ki:.6f}")
+            else:
+                print(f"[自动整定] 失败：{tune_result.message}，使用配置默认增益")
+                logger.warning(f"[AutoTune] 失败：{tune_result.message}")
+
+        # ── PID 定位 ────────────────────────────────────────────
         result = run_pid_control(
             target_nm=target_nm,
             cfg=cfg,
@@ -1352,12 +1592,13 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main.py                                    # 正常采集（需连接硬件）
-  python main.py --dry-run                          # 模拟采集（无需硬件）
-  python main.py --load lut_xxx.csv                 # 查询模式
-  python main.py --pid 1000                         # PID 定位到 1000 nm
-  python main.py --pid 1000 --load lut_xxx.csv      # PID + LUT 前馈
-  python main.py --pid 1000 --dry-run               # PID 模拟模式
+  python main.py                                         # 正常采集（需连接硬件）
+  python main.py --dry-run                               # 模拟采集（无需硬件）
+  python main.py --load lut_xxx.csv                      # 查询模式
+  python main.py --pid 1000                              # PID 定位到 1000 nm
+  python main.py --pid 1000 --load lut_xxx.csv           # PID + LUT 前馈
+  python main.py --pid 1000 --autotune                   # 先自动整定再定位
+  python main.py --pid 1000 --autotune --dry-run         # 模拟自动整定
         """,
     )
     parser.add_argument(
@@ -1383,6 +1624,11 @@ def main() -> None:
         default=25.0,
         help="PID 模式的温度 °C，用于 LUT 前馈查询（默认 25）",
     )
+    parser.add_argument(
+        "--autotune",
+        action="store_true",
+        help="在 PID 定位前执行阶跃响应自动整定（需配合 --pid 使用）",
+    )
     args = parser.parse_args()
 
     cfg = Config(dry_run=args.dry_run)
@@ -1393,6 +1639,7 @@ def main() -> None:
             temperature_C=args.pid_temp,
             lut_path=args.load,
             cfg=cfg,
+            do_autotune=args.autotune,
         )
         return
 

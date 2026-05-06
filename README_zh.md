@@ -85,6 +85,21 @@ uv run python main.py --pid 1000 --load lut_xxx.csv --pid-temp 30
 uv run python main.py --pid 1000 --load lut_xxx.csv --dry-run
 ```
 
+### PID 自动整定（首次使用推荐）
+
+```bash
+# 自动整定后定位到 1000 nm
+uv run python main.py --pid 1000 --autotune
+
+# 自动整定 + LUT 前馈（最高精度）
+uv run python main.py --pid 1000 --autotune --load lut_output/lut_20250506_143022.csv
+
+# 模拟自动整定（无需硬件）
+uv run python main.py --pid 1000 --autotune --dry-run
+```
+
+`--autotune` 在 PID 定位前先执行阶跃响应辨识测试，自动计算 `Kp` 和 `Ki`，无需手动调参。整定增益仅对本次会话有效；如需永久保存，将打印的数值写入 `main.py` 顶部配置即可。
+
 控制器每次迭代实时打印当前电压、位移和误差。当误差连续 `PID_CONVERGE_COUNT` 次满足 `PID_TOLERANCE_NM` 时宣告收敛，程序保持当前电压直到 `Ctrl+C`。退出时电压自动归零。
 
 ---
@@ -124,6 +139,13 @@ PID_TIMEOUT_S       = 30.0         # 最长等待时间 s
 PID_SAMPLE_AVG      = 20           # 每次 PID 迭代平均采样帧数
 PID_LOOP_INTERVAL   = 0.05         # 目标循环间隔 s
 PID_INTEGRAL_LIMIT  = 0.5          # 积分项最大贡献 V（抗积分饱和）
+
+# 自动整定参数（--autotune）
+AUTOTUNE_V_LOW      = 0.5          # 阶跃测试起始电压 V
+AUTOTUNE_V_HIGH     = 2.5          # 阶跃测试终止电压 V
+AUTOTUNE_COLLECT_S  = 3.0          # 阶跃响应采集时长 s
+AUTOTUNE_METHOD     = "IMC"        # 整定方法：'IMC'（推荐）或 'ZN'
+AUTOTUNE_LAMBDA     = 1.0          # IMC 闭环时间常数倍数（越大越保守）
 ```
 
 **多温度扫描示例：**
@@ -270,6 +292,83 @@ v_min, v_max = lut.voltage_range(direction="up")
 ```
 
 `direction` 参数接受 `"up"`（升压）或 `"down"`（降压），用于区分迟滞曲线。
+
+---
+
+## PID 自动整定
+
+### 方法概述
+
+`--autotune` 通过实测阶跃响应辨识 Piezo 被控对象模型，自动计算 `Kp` 和 `Ki`，无需手动调参。
+
+```
+阶跃：AUTOTUNE_V_LOW → AUTOTUNE_V_HIGH
+              ↓
+采集 AUTOTUNE_COLLECT_S 秒的位移-时间响应
+              ↓
+拟合一阶加纯滞后模型（FOPDT）：
+    G(s) = K · e^(-θs) / (τs + 1)
+    K = 静态增益 (nm/V)
+    τ = 时间常数 (s)
+    θ = 纯滞后 (s)
+              ↓
+按整定规则（IMC 或 ZN）计算 Kp、Ki
+              ↓
+应用增益，执行 PID 定位
+```
+
+### 整定规则
+
+**IMC（内模控制）—— 推荐：**
+
+$$K_p = \frac{\tau}{K(\lambda + \theta)}, \quad K_i = \frac{K_p}{\tau}$$
+
+其中 λ = `AUTOTUNE_LAMBDA × τ` 为期望的闭环时间常数。λ 越大，响应越慢但越鲁棒。
+
+**Ziegler-Nichols（过程反应曲线法）：**
+
+$$K_p = \frac{0.9\,\tau}{K\,\theta}, \quad K_i = \frac{K_p}{3.33\,\theta}$$
+
+ZN 给出更激进的增益，适合对收敛速度要求高的场合。
+
+### 控制台输出示例
+
+```
+========================================
+PID 自动整定（阶跃响应法）
+========================================
+阶跃：0.50V → 2.50V  (ΔV=+2.00V)
+采集：3.0s  方法：IMC
+
+[1/4] 稳定至初始电压…
+[2/4] 施加阶跃，采集 3.0s 响应…
+[3/4] 拟合 FOPDT 模型…
+[4/4] 计算 PID 增益…
+
+────────────────────────────────────────
+模型识别结果（FOPDT）：
+  增益     K  = 409.4 nm/V
+  时间常数 τ  = 80.2 ms
+  纯滞后   θ  = 10.0 ms
+
+整定结果（IMC）：
+  Kp = 0.002171 V/nm
+  Ki = 0.027078 V/(nm·s)
+  Kd = 0.0  （保持关闭）
+
+如需永久保存，请将以上值写入 main.py 顶部配置。
+────────────────────────────────────────
+[自动整定] 已应用 Kp=0.002171  Ki=0.027078
+```
+
+### 使用建议
+
+| 场景 | 建议 |
+|------|------|
+| 首次使用新 Piezo | 务必先运行 `--autotune` 辨识被控对象 |
+| 温度发生变化后 | 重新运行 `--autotune`，动态特性可能发生偏移 |
+| PID 出现振荡或收敛慢 | 调大 `AUTOTUNE_LAMBDA` 后重新整定 |
+| 被控对象已充分表征 | 跳过 `--autotune`，直接使用手动配置增益 |
 
 ---
 

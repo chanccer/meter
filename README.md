@@ -85,6 +85,21 @@ uv run python main.py --pid 1000 --load lut_xxx.csv --pid-temp 30
 uv run python main.py --pid 1000 --load lut_xxx.csv --dry-run
 ```
 
+### PID auto-tuning (recommended for first use)
+
+```bash
+# Auto-tune PID gains, then drive to 1000 nm
+uv run python main.py --pid 1000 --autotune
+
+# Auto-tune + LUT feedforward (best accuracy)
+uv run python main.py --pid 1000 --autotune --load lut_output/lut_20250506_143022.csv
+
+# Simulate auto-tuning (no hardware)
+uv run python main.py --pid 1000 --autotune --dry-run
+```
+
+`--autotune` runs a step-response identification test before PID positioning. It automatically computes `Kp` and `Ki` from the measured plant dynamics — no manual tuning required. The identified gains apply for the current session; copy them to `main.py` to make them permanent.
+
 The controller outputs the current voltage, measured displacement, and positioning error on each iteration. When the error has stayed within `PID_TOLERANCE_NM` for `PID_CONVERGE_COUNT` consecutive iterations, the Piezo is locked at the target and the script holds until `Ctrl+C`. On exit, the voltage is zeroed automatically.
 
 ---
@@ -124,6 +139,13 @@ PID_TIMEOUT_S       = 30.0         # Maximum time to converge (s)
 PID_SAMPLE_AVG      = 20           # Frames averaged per PID iteration
 PID_LOOP_INTERVAL   = 0.05         # Target loop interval (s)
 PID_INTEGRAL_LIMIT  = 0.5          # Maximum I-term contribution (V) — anti-windup cap
+
+# Auto-tuning (--autotune)
+AUTOTUNE_V_LOW      = 0.5          # Step test start voltage (V)
+AUTOTUNE_V_HIGH     = 2.5          # Step test end voltage (V)
+AUTOTUNE_COLLECT_S  = 3.0          # Step response collection duration (s)
+AUTOTUNE_METHOD     = "IMC"        # Tuning method: 'IMC' (recommended) or 'ZN'
+AUTOTUNE_LAMBDA     = 1.0          # IMC closed-loop time constant multiplier (larger = more conservative)
 ```
 
 **Multi-temperature example:**
@@ -270,6 +292,83 @@ v_min, v_max = lut.voltage_range(direction="up")
 ```
 
 The `direction` parameter (`"up"` or `"down"`) selects which hysteresis branch to query.
+
+---
+
+## PID Auto-Tuning
+
+### Method overview
+
+`--autotune` identifies the Piezo plant model from a measured step response, then computes `Kp` and `Ki` automatically. No manual tuning is needed.
+
+```
+Step: V_LOW → V_HIGH
+         ↓
+Collect displacement vs. time (AUTOTUNE_COLLECT_S seconds)
+         ↓
+Fit First-Order Plus Dead Time (FOPDT) model:
+    G(s) = K · e^(−θs) / (τs + 1)
+    K = static gain (nm/V)
+    τ = time constant (s)
+    θ = dead time (s)
+         ↓
+Compute Kp, Ki from tuning rules (IMC or Ziegler-Nichols)
+         ↓
+Apply gains and run PID positioning
+```
+
+### Tuning rules
+
+**IMC (Internal Model Control) — recommended:**
+
+$$K_p = \frac{\tau}{K(\lambda + \theta)}, \quad K_i = \frac{K_p}{\tau}$$
+
+where λ = `AUTOTUNE_LAMBDA × τ` is the desired closed-loop time constant. Larger λ → slower but more robust response.
+
+**Ziegler-Nichols (process reaction curve):**
+
+$$K_p = \frac{0.9\,\tau}{K\,\theta}, \quad K_i = \frac{K_p}{3.33\,\theta}$$
+
+ZN gives more aggressive gains and is suitable when fast convergence is prioritized over robustness.
+
+### Console output example
+
+```
+========================================
+PID 自动整定（阶跃响应法）
+========================================
+阶跃：0.50V → 2.50V  (ΔV=+2.00V)
+采集：3.0s  方法：IMC
+
+[1/4] 稳定至初始电压…
+[2/4] 施加阶跃，采集 3.0s 响应…
+[3/4] 拟合 FOPDT 模型…
+[4/4] 计算 PID 增益…
+
+────────────────────────────────────────
+模型识别结果（FOPDT）：
+  增益     K  = 409.4 nm/V
+  时间常数 τ  = 80.2 ms
+  纯滞后   θ  = 10.0 ms
+
+整定结果（IMC）：
+  Kp = 0.002171 V/nm
+  Ki = 0.027078 V/(nm·s)
+  Kd = 0.0  （保持关闭）
+
+如需永久保存，请将以上值写入 main.py 顶部配置。
+────────────────────────────────────────
+[自动整定] 已应用 Kp=0.002171  Ki=0.027078
+```
+
+### When to use auto-tuning
+
+| Situation | Recommendation |
+|-----------|----------------|
+| First time using a new Piezo | Always run `--autotune` to identify the plant |
+| After changing temperature | Re-run `--autotune` — dynamics may shift |
+| PID oscillates or converges slowly | Re-run with `AUTOTUNE_LAMBDA` adjusted |
+| Plant is well-characterized | Skip `--autotune`; use manually configured gains |
 
 ---
 
