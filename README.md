@@ -297,6 +297,89 @@ The `direction` parameter (`"up"` or `"down"`) selects which hysteresis branch t
 
 ## PID Auto-Tuning
 
+### Physical and mathematical background
+
+#### Why Piezo actuators need tuning
+
+A Piezo actuator is an electromechanical transducer that converts voltage to mechanical displacement through the inverse piezoelectric effect. From a control perspective, three physical phenomena make manual PID tuning difficult:
+
+| Phenomenon | Physical cause | Control impact |
+|------------|---------------|----------------|
+| **Hysteresis** | Ferroelectric domain switching | Output depends on voltage history, not just present voltage |
+| **Creep** | Slow domain relaxation after a voltage step | Displacement drifts for seconds to minutes after the voltage is set |
+| **Capacitive dynamics** | Piezo is a lossy capacitor (driving source has finite output impedance) | Finite rise time; exponential approach to steady state |
+
+The LUT acquisition addresses hysteresis by sweeping both directions. The PID controller — once properly tuned — compensates for creep and dynamic lag in real time. `--autotune` automates the identification of the dynamic parameters needed to set the PID gains correctly.
+
+#### Plant model: First-Order Plus Dead Time (FOPDT)
+
+The dominant dynamics of the Piezo + sensor + communication chain are well approximated by:
+
+$$G(s) = \frac{K \, e^{-\theta s}}{\tau s + 1}$$
+
+| Symbol | Unit | Physical meaning |
+|--------|------|-----------------|
+| K | nm/V | Static (DC) gain — how many nm per volt at steady state |
+| τ | s | Time constant — speed of the exponential approach to steady state (mechanical + electrical) |
+| θ | s | Dead time — lumped delay from serial latency (~1 ms), PID loop interval, and Piezo mechanical lag |
+
+The corresponding step response (voltage jumps by ΔV at t = 0) is:
+
+$$y(t) = \begin{cases} y_0 & t \leq \theta \\ y_0 + K \cdot \Delta V \left(1 - e^{-(t-\theta)/\tau}\right) & t > \theta \end{cases}$$
+
+This is the equation fitted by `scipy.optimize.curve_fit` during the identification step.
+
+#### Step-response identification
+
+Given N timed samples {tᵢ, yᵢ} collected after the voltage step, the code minimises the nonlinear least-squares residual:
+
+$$\min_{K,\,\tau,\,\theta} \sum_{i=1}^{N} \left[ y_i - y(t_i;\, K, \tau, \theta) \right]^2$$
+
+The Levenberg-Marquardt algorithm (via `curve_fit`) converges reliably for the parameter ranges typical of Piezo + µMD2 systems (K: 10–5000 nm/V, τ: 1 ms–60 s, θ: 0–10 s).
+
+#### IMC-based PI tuning (recommended)
+
+Internal Model Control (IMC) designs the controller so that the closed-loop behaves like a first-order system with a freely chosen time constant λ:
+
+$$T_{cl}(s) = \frac{e^{-\theta s}}{\lambda s + 1}$$
+
+The corresponding IMC controller is:
+
+$$Q(s) = \frac{T_{cl}(s)}{G(s)} = \frac{\tau s + 1}{K(\lambda s + 1)}$$
+
+Converting to the equivalent standard feedback PI form:
+
+$$C(s) = K_p \left(1 + \frac{1}{T_i s}\right), \quad \text{where}$$
+
+$$\boxed{K_p = \frac{\tau}{K(\lambda + \theta)}}, \qquad \boxed{K_i = \frac{K_p}{\tau} = \frac{1}{K(\lambda + \theta)}}$$
+
+**Design guideline for λ:** λ = τ (`AUTOTUNE_LAMBDA = 1.0`) is a good starting point. Increase λ to slow down the response and gain robustness against model mismatch (e.g. nonlinear hysteresis); decrease λ for faster convergence when the model is accurate.
+
+**Stability guarantee:** The IMC design is inherently stable for any λ > 0 as long as the FOPDT model is a reasonable approximation of the plant. Unlike direct Ziegler-Nichols tuning, there is no risk of selecting gains above the stability boundary.
+
+#### Ziegler-Nichols (process reaction curve)
+
+The ZN method uses only two scalars extracted from the step response:
+
+- **Reaction rate:** $R = K/\tau$ (slope of the tangent at the inflection point, nm V⁻¹ s⁻¹)
+- **Dead time:** L = θ
+
+Recommended PI settings (Ziegler & Nichols, 1942):
+
+$$K_p = \frac{0.9}{R \cdot L} = \frac{0.9\,\tau}{K\,\theta}, \qquad T_i = \frac{L}{0.3} = 3.33\,\theta, \qquad K_i = \frac{K_p}{T_i} = \frac{0.27\,\tau}{K\,\theta^2}$$
+
+ZN targets approximately 25 % overshoot and is more aggressive than IMC. It is suitable when speed matters more than smooth convergence, but it can oscillate when θ is large relative to τ.
+
+#### Units and sign convention
+
+The discrete-time PI update implemented in `PIDController.update()` is:
+
+$$v[k] = v[k-1] + K_p \cdot e[k] + K_i \cdot \Delta t \cdot \sum_{j \leq k} e[j]$$
+
+where e[k] = target_nm − measured_nm (positive when the actuator needs to extend further). Kp and Ki both have units V/nm and V/(nm·s) respectively, consistent with the continuous-time derivation above.
+
+---
+
 ### Method overview
 
 `--autotune` identifies the Piezo plant model from a measured step response, then computes `Kp` and `Ki` automatically. No manual tuning is needed.
