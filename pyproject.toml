@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "matplotlib>=3.10.9",
     "moku>=4.2.1.1",
     "numpy>=2.0",
     "pandas>=3.0.2",

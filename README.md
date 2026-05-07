@@ -551,6 +551,100 @@ moku.close()
 
 ---
 
+## PID Simulation GUI
+
+`simulate.py` is a standalone interactive GUI for exploring Piezo PID behaviour without hardware. It runs a discrete-time FOPDT simulation with a PI controller and lets you tune every parameter in real time.
+
+### Launch
+
+```bash
+uv run python simulate.py
+```
+
+Requires tkinter (install `python-tk` for your Python version, e.g. `brew install python-tk@3.13` on macOS).
+
+### Interface layout
+
+```
+┌─ Controls (left) ──────────────────────────────────────────────────────────┐
+│  Plant (FOPDT)        K (nm/V)  τ (ms)  θ (ms)                            │
+│  PID Gains            Kp  Ki  Kd   [IMC Auto-tune]                         │
+│  Feedback Delay       Extra delay (ms)                                      │
+│  Setpoint             Target displacement (nm)                              │
+│  Disturbance          Type ▾   Amplitude (nm)   Freq (Hz)                  │
+│  Sensor Noise         RMS (nm)                                              │
+│  Simulation           Duration (s)   Step time (s)   V max (V)             │
+│  [▶ Run Simulation]  [Reset]                                                │
+└────────────────────────────────────────────────────────────────────────────┘
+┌─ Plots (right) ────────────────────────────────────────────────────────────┐
+│  ┌──────────────────┐  ┌──────────────────┐                                │
+│  │ Displacement (nm)│  │ Positioning Error │                                │
+│  └──────────────────┘  └──────────────────┘                                │
+│  ┌──────────────────┐  ┌──────────────────┐                                │
+│  │ Control Voltage  │  │ Disturbance (nm) │                                │
+│  └──────────────────┘  └──────────────────┘                                │
+│  [matplotlib toolbar: pan | zoom | save PNG/PDF/SVG]                       │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Parameters
+
+| Section | Parameter | Default | Range |
+|---------|-----------|---------|-------|
+| Plant | K — static gain (nm/V) | 410 | 10–2000 |
+| Plant | τ — time constant (ms) | 80 | 5–500 |
+| Plant | θ — plant dead time (ms) | 10 | 0–200 |
+| PID | Kp | 0.002 | 0–0.05 |
+| PID | Ki | 0.027 | 0–2.00 |
+| PID | Kd | 0 | 0–0.01 |
+| Feedback | Extra sensor delay (ms) | 0 | 0–500 |
+| Setpoint | Target displacement (nm) | 1000 | 100–5000 |
+| Disturbance | Type | none | none / high-freq sine / low-freq sine / periodic square |
+| Disturbance | Amplitude (nm) | 50 | 0–500 |
+| Disturbance | Frequency (Hz) | 10 | 0.1–200 |
+| Noise | Sensor RMS (nm) | 5 | 0–50 |
+| Simulation | Duration (s) | 2.0 | 0.5–10 |
+
+### Simulation model
+
+The simulation engine uses a 1 ms plant integration step (Euler method) with a 50 ms PID update interval — matching the typical real-time loop cadence.
+
+**Plant** (first-order plus dead time):
+
+$$G(s) = \frac{K\,e^{-\theta s}}{\tau s + 1}$$
+
+Dead time is implemented as a circular delay buffer of length $\lceil \theta / \Delta t_{\rm plant} \rceil$.
+
+**Additional feedback delay**: a second circular buffer delays the sensor measurement before it reaches the PID controller, simulating cable latency, filter lag, or slow communication.
+
+**Disturbance types** (applied at plant output, starting at `Step time`):
+
+| Type | Signal |
+|------|--------|
+| high-freq sine | $d(t) = A \sin(2\pi f t)$ |
+| low-freq sine | $d(t) = A \sin(2\pi (f/10)\, t)$ |
+| periodic square | $d(t) = A \operatorname{sgn}[\sin(2\pi f t)]$ |
+
+**Anti-windup**: the integrator accumulation is clamped so that the integral term alone cannot saturate the output beyond the voltage limits.
+
+### IMC Auto-tune button
+
+Computes IMC PI gains directly from the current slider values (K, τ, θ) with $\lambda = 2\theta$:
+
+$$K_p = \frac{\tau}{K(\lambda + \theta)}, \quad K_i = \frac{K_p}{\tau}$$
+
+The result is written back to the Kp and Ki sliders immediately, so you can press **Run Simulation** again to see the closed-loop response.
+
+### Chart export
+
+Use the matplotlib navigation toolbar at the bottom of the plot panel:
+
+- **Floppy disk icon** → Save dialog (PNG, PDF, SVG, EPS)
+- **Magnifier icon** → Zoom to region
+- **Pan icon** → Pan / scroll
+
+---
+
 ## Console Output Example
 
 ```
