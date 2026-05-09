@@ -1,0 +1,65 @@
+{
+  "K": 410,
+  "tau_ms": 80,
+  "theta_us": 10000,
+  "v_dead": 0,
+  "hysteresis_nm": 0,
+  "noise": 5,
+  "ctrl_mode": "ADRC",
+  "kp": 0.0027177700348432056,
+  "ki": 0.027874564459930314,
+  "kd": 1.2789506046320967E-5,
+  "d_filter_n": 17,
+  "adrc_wc": 9.5238095238095237,
+  "adrc_w0": 47.61904761904762,
+  "smith_adrc": false,
+  "delay_us": 0,
+  "sp_dc": 1500,
+  "v_max": 20,
+  "t_total": 20,
+  "dt_pid_us": 50000,
+  "setpoints": [
+    {
+      "en": true,
+      "type": "Step",
+      "amp": 2000,
+      "period": 1,
+      "t0": 0.1,
+      "dur": 0
+    },
+    {
+      "en": true,
+      "type": "Sine",
+      "amp": 2000,
+      "period": 3,
+      "t0": 0.1,
+      "dur": 0
+    }
+  ],
+  "signals": [
+    {
+      "en": true,
+      "type": "Sine",
+      "amp": 500,
+      "period": 4,
+      "t0": 0,
+      "dur": 0
+    },
+    {
+      "en": true,
+      "type": "Sine",
+      "amp": 700,
+      "period": 10,
+      "t0": 0,
+      "dur": 0
+    },
+    {
+      "en": true,
+      "type": "Triangle",
+      "amp": 800,
+      "period": 10,
+      "t0": 0,
+      "dur": 0
+    }
+  ]
+}

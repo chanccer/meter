@@ -75,6 +75,16 @@ AUTOTUNE_COLLECT_S  = 3.0          # 阶跃响应采集时长 s
 AUTOTUNE_METHOD     = "IMC"        # 整定方法：'IMC'（推荐）或 'ZN'
 AUTOTUNE_LAMBDA     = 1.0          # IMC 闭环时间常数倍数（越大越保守）
 
+# 模型辨识（集成到采集流程，每个温度点完成后自动执行）
+STEP_IDENT_ENABLED  = True         # 是否执行阶跃响应辨识
+STEP_IDENT_V_LOW    = 0.5          # 辨识阶跃起始电压 V
+STEP_IDENT_V_HIGH   = 2.5          # 辨识阶跃终止电压 V
+STEP_IDENT_COLLECT_S = 3.0         # 每次阶跃响应采集时长 s
+STEP_IDENT_REPS     = 3            # 重复辨识次数（结果取均值）
+
+# 协议延迟测量（区分 piezo 机械延迟与通信延迟）
+PROTO_DELAY_REPS    = 10           # 协议延迟测量重复次数
+
 # ============================================================
 # 内部常量
 # ============================================================
@@ -119,6 +129,12 @@ class Config:
     autotune_collect_s: float = AUTOTUNE_COLLECT_S
     autotune_method: str = AUTOTUNE_METHOD
     autotune_lambda: float = AUTOTUNE_LAMBDA
+    step_ident_enabled: bool   = STEP_IDENT_ENABLED
+    step_ident_v_low: float    = STEP_IDENT_V_LOW
+    step_ident_v_high: float   = STEP_IDENT_V_HIGH
+    step_ident_collect_s: float = STEP_IDENT_COLLECT_S
+    step_ident_reps: int       = STEP_IDENT_REPS
+    proto_delay_reps: int      = PROTO_DELAY_REPS
 
     @property
     def nm_per_count(self) -> int:
@@ -156,6 +172,23 @@ class DeviceInfo:
     sample_rate_hz: Optional[int] = None
     temperature_C: Optional[float] = None
     port: Optional[str] = None
+
+
+@dataclass
+class ModelParams:
+    """单温度点的 FOPDT 动态模型参数（由阶跃响应辨识得到）。"""
+
+    temperature_C: float
+    K_nm_per_V: float    # 静态增益 nm/V
+    tau_ms: float        # 时间常数 ms
+    theta_ms: float      # 总纯滞后 ms（θ_piezo + θ_protocol）
+    v_dead_V: float      # 死区电压 V（低于此值 piezo 不动）
+    r2_fit: float        # 拟合优度 R²（越接近 1 越好）
+    noise_rms_nm: float  # 传感器噪声 RMS nm（从静态扫描 std_nm 估算）
+    # 延迟分解（由 measure_protocol_delay 测量）
+    theta_piezo_ms: float    = 0.0   # piezo 机械延迟 ms（θ_total − θ_protocol）
+    theta_protocol_ms: float = 0.0   # 通信协议延迟 ms（Moku命令 + 串口帧 + USB）
+    timestamp: str = ""
 
 
 # ============================================================
@@ -439,6 +472,15 @@ class UMD2Reader:
                         pass
         return None
 
+    def measure_frame_interval(self, timeout: float = 0.5) -> Optional[float]:
+        """等待下一帧到达，返回等待时间（ms）；超时返回 None。"""
+        t0 = time.monotonic()
+        try:
+            self._queue.get(timeout=timeout)
+            return (time.monotonic() - t0) * 1000.0
+        except queue.Empty:
+            return None
+
     def close(self) -> None:
         """停止后台线程并关闭串口。"""
         self._running = False
@@ -508,6 +550,11 @@ class DryRunUMD2Reader(UMD2Reader):
                         y0)
         resp += np.random.normal(0.0, 5.0, n)
         return list(t), list(resp)
+
+    def measure_frame_interval(self, timeout: float = 0.5) -> Optional[float]:
+        """模拟 1kHz 采样率 + 2ms USB 轮询延迟。"""
+        time.sleep(0.001)
+        return 3.0  # 1ms 帧周期 + 2ms USB ≈ 3ms
 
     def close(self) -> None:
         pass
@@ -762,6 +809,12 @@ class CSVWriter:
         pd.DataFrame(rows).to_csv(path, index=False)
         return path
 
+    def save_model_params(self, params: list["ModelParams"]) -> Path:
+        """保存阶跃响应辨识得到的 FOPDT 模型参数（每温度一行）。"""
+        path = Path(self._cfg.output_dir) / f"model_{self._ts}.csv"
+        pd.DataFrame([p.__dict__ for p in params]).to_csv(path, index=False)
+        return path
+
 
 # ============================================================
 # 扫描执行器
@@ -897,6 +950,7 @@ def run_acquisition(cfg: Config) -> None:
         multi_temp = len(cfg.temperatures) > 1
         total_sweeps = len(cfg.temperatures) * 2
         sweep_idx = 0
+        model_params_list: list[ModelParams] = []
 
         for temp_idx, temp_C in enumerate(cfg.temperatures, start=1):
             print(f"\n{'-' * 40}")
@@ -926,6 +980,12 @@ def run_acquisition(cfg: Config) -> None:
             logger.info(f"总进度: {pct}%  开始 {temp_C}°C 降压扫描")
             run_sweep(cfg, temp_C, "down", umd2, moku, store, logger)
 
+            # 阶跃响应辨识（提取 K、τ、θ）
+            if cfg.step_ident_enabled:
+                mp = identify_model(cfg, temp_C, umd2, moku, logger, store)
+                if mp is not None:
+                    model_params_list.append(mp)
+
             # 每温度完成后立即保存中间结果
             partial_path = csv_writer.save_partial(store, temp_C)
             logger.info(f"中间结果已保存: {partial_path}")
@@ -940,6 +1000,9 @@ def run_acquisition(cfg: Config) -> None:
         print("全部完成！")
         print(f"[保存] 完整LUT: {full_path}")
         print(f"[保存] 摘要:    {summary_path}")
+        if model_params_list:
+            model_path = csv_writer.save_model_params(model_params_list)
+            print(f"[保存] 模型参数: {model_path}")
         print("=" * 40)
 
         _demo_piezo_lut(str(full_path), cfg, logger)
@@ -1317,6 +1380,190 @@ class AutoTuner:
         print(f"  Kd = 0.0  （保持关闭）")
         print(f"\n如需永久保存，请将以上值写入 main.py 顶部配置。")
         print(f"{'─' * 40}")
+
+
+def measure_protocol_delay(
+    cfg: Config,
+    umd2: UMD2Reader,
+    moku: MokuController,
+    logger: logging.Logger,
+) -> tuple[float, float]:
+    """
+    测量通信协议延迟，分解为两部分：
+
+    1. t_moku_ms  — Moku:Go set_voltage() 调用耗时（网络往返 + 设备处理）
+       方法：向同一电压发送 N 次命令（不改变 piezo 状态），对耗时取均值
+
+    2. t_frame_ms — µMD2 帧到达延迟（= 串口帧周期 + USB 轮询延迟）
+       方法：清空队列后计时等待下一帧
+
+    返回：(t_moku_ms, t_frame_ms)
+    θ_protocol = t_moku_ms + t_frame_ms
+    θ_piezo    = θ_total   − θ_protocol   （在 identify_model 中计算）
+    """
+    reps  = cfg.proto_delay_reps
+    ch    = cfg.moku_channel
+    v_ref = cfg.step_ident_v_low
+
+    print(f"\n  [协议延迟测量] 重复 {reps} 次…", end=" ", flush=True)
+
+    # ── 1. Moku 命令往返时间 ─────────────────────────────────
+    # 向同一电压发送命令，不触发 piezo 运动，纯测网络+设备延迟
+    moku.set_voltage(ch, v_ref)
+    time.sleep(0.3)
+    cmd_times: list[float] = []
+    for _ in range(reps):
+        t0 = time.monotonic()
+        moku.set_voltage(ch, v_ref)
+        cmd_times.append((time.monotonic() - t0) * 1000.0)
+    t_moku_ms = float(np.mean(cmd_times))
+
+    # ── 2. µMD2 帧到达延迟 ───────────────────────────────────
+    umd2.flush_queue()
+    frame_times: list[float] = []
+    for _ in range(reps):
+        ft = umd2.measure_frame_interval(timeout=0.5)
+        if ft is not None:
+            frame_times.append(ft)
+    t_frame_ms = float(np.mean(frame_times)) if frame_times else 0.0
+
+    t_protocol_ms = t_moku_ms + t_frame_ms
+    print(f"Moku={t_moku_ms:.2f}ms  帧={t_frame_ms:.2f}ms  合计={t_protocol_ms:.2f}ms")
+    logger.info(
+        f"[协议延迟] Moku命令={t_moku_ms:.2f}ms  "
+        f"串口/USB帧={t_frame_ms:.2f}ms  "
+        f"总协议延迟={t_protocol_ms:.2f}ms"
+    )
+    return t_moku_ms, t_frame_ms
+
+
+def identify_model(
+    cfg: Config,
+    temp_C: float,
+    umd2: UMD2Reader,
+    moku: MokuController,
+    logger: logging.Logger,
+    lut_store: Optional["DataStore"] = None,
+) -> Optional[ModelParams]:
+    """
+    在当前温度下执行阶跃响应辨识，提取 FOPDT 模型参数 K、τ、θ。
+
+    重复 cfg.step_ident_reps 次后取均值，降低噪声影响。
+    可选：从 lut_store 的 std_nm 估算传感器噪声 RMS。
+    """
+    ch      = cfg.moku_channel
+    v_low   = cfg.step_ident_v_low
+    v_high  = cfg.step_ident_v_high
+    reps    = cfg.step_ident_reps
+    delta_v = v_high - v_low
+
+    if abs(delta_v) < 0.1:
+        logger.warning("[模型辨识] 阶跃幅度不足，跳过")
+        return None
+
+    print(f"\n{'─' * 40}")
+    print(f"[模型辨识] {temp_C}°C  阶跃 {v_low:.1f}→{v_high:.1f}V  重复 {reps} 次")
+
+    # 先测协议延迟，用于事后分解 θ_total = θ_piezo + θ_protocol
+    t_moku_ms, t_frame_ms = measure_protocol_delay(cfg, umd2, moku, logger)
+    t_protocol_ms = t_moku_ms + t_frame_ms
+
+    tuner = AutoTuner(cfg, umd2, moku, logger)
+    Ks: list[float] = []
+    taus: list[float] = []
+    thetas: list[float] = []
+    r2s: list[float] = []
+
+    for rep in range(1, reps + 1):
+        print(f"  [{rep}/{reps}] 稳定初始电压…", end=" ", flush=True)
+        moku.set_voltage(ch, v_low)
+        time.sleep(max(cfg.settle_time * 6, 2.0))
+        umd2.flush_queue()
+        pre = umd2.read_displacement(50)
+        y0 = float(np.mean(pre)) if pre else 0.0
+
+        moku.set_voltage(ch, v_high)
+        t_arr, d_arr = umd2.read_displacement_timed(cfg.step_ident_collect_s)
+
+        if len(t_arr) < 30:
+            logger.warning(f"[模型辨识] 第 {rep} 次采集不足 ({len(t_arr)} 帧)，跳过")
+            continue
+
+        t_np = np.array(t_arr)
+        d_np = np.array(d_arr)
+        try:
+            K, tau, theta = tuner._fit_fopdt(t_np, d_np, y0, delta_v)
+            if K <= 0 or tau <= 0:
+                logger.warning(f"[模型辨识] 第 {rep} 次拟合结果异常 K={K:.1f}")
+                continue
+            fitted = AutoTuner._fopdt_model(t_np, K, tau, theta, y0, delta_v)
+            ss_res = float(np.sum((d_np - fitted) ** 2))
+            ss_tot = float(np.sum((d_np - float(np.mean(d_np))) ** 2))
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+            Ks.append(K); taus.append(tau); thetas.append(theta); r2s.append(r2)
+            print(f"K={K:.0f}nm/V  τ={tau*1000:.0f}ms  θ={theta*1000:.1f}ms  R²={r2:.3f}")
+        except Exception as e:
+            logger.warning(f"[模型辨识] 第 {rep} 次拟合异常: {e}")
+
+    # 归回低电压
+    moku.set_voltage(ch, v_low)
+    time.sleep(cfg.settle_time)
+
+    if not Ks:
+        logger.error("[模型辨识] 所有辨识均失败")
+        return None
+
+    K_mean     = float(np.mean(Ks))
+    tau_mean   = float(np.mean(taus))
+    theta_mean = float(np.mean(thetas))
+    r2_mean    = float(np.mean(r2s))
+
+    # 传感器噪声 RMS 和死区电压：从本温度升压曲线提取
+    noise_rms = 0.0
+    v_dead    = 0.0
+    if lut_store is not None:
+        df = lut_store.to_dataframe()
+        if not df.empty and "std_nm" in df.columns:
+            up_df = df[
+                (df["temperature_C"] == temp_C) & (df["direction"] == "up")
+            ].sort_values("voltage_V")
+            if not up_df.empty:
+                noise_rms = float(up_df["std_nm"].mean())
+                # 死区：位移超过基线 + max(3σ, 10nm) 的第一个电压点
+                baseline  = float(up_df.iloc[0]["mean_nm"])
+                threshold = baseline + max(3.0 * noise_rms, 10.0)
+                for _, row in up_df.iterrows():
+                    if float(row["mean_nm"]) > threshold:
+                        v_dead = float(row["voltage_V"])
+                        break
+
+    theta_total_ms  = theta_mean * 1000
+    theta_piezo_ms  = max(0.0, theta_total_ms - t_protocol_ms)
+
+    params = ModelParams(
+        temperature_C=temp_C,
+        K_nm_per_V=K_mean,
+        tau_ms=tau_mean * 1000,
+        theta_ms=theta_total_ms,
+        v_dead_V=v_dead,
+        r2_fit=r2_mean,
+        noise_rms_nm=noise_rms,
+        theta_piezo_ms=theta_piezo_ms,
+        theta_protocol_ms=t_protocol_ms,
+        timestamp=datetime.now().isoformat(timespec="seconds"),
+    )
+
+    print(f"\n  结果（{reps if Ks else 0}/{reps} 次有效）：")
+    print(f"  K           = {K_mean:.1f} nm/V")
+    print(f"  τ           = {tau_mean*1000:.1f} ms")
+    print(f"  θ 总        = {theta_total_ms:.1f} ms")
+    print(f"    θ_piezo   = {theta_piezo_ms:.1f} ms  (机械延迟)")
+    print(f"    θ_protocol= {t_protocol_ms:.1f} ms  (Moku{t_moku_ms:.1f}ms + 串口/USB{t_frame_ms:.1f}ms)")
+    print(f"  V_dead      = {v_dead:.2f} V")
+    print(f"  R²          = {r2_mean:.4f}")
+    print(f"  噪声        ≈ {noise_rms:.1f} nm RMS")
+    print(f"{'─' * 40}")
+    return params
 
 
 def run_pid_control(

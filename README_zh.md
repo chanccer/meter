@@ -146,6 +146,14 @@ AUTOTUNE_V_HIGH     = 2.5          # 阶跃测试终止电压 V
 AUTOTUNE_COLLECT_S  = 3.0          # 阶跃响应采集时长 s
 AUTOTUNE_METHOD     = "IMC"        # 整定方法：'IMC'（推荐）或 'ZN'
 AUTOTUNE_LAMBDA     = 1.0          # IMC 闭环时间常数倍数（越大越保守）
+
+# 模型辨识（每温度点完成后自动执行阶跃响应辨识）
+STEP_IDENT_ENABLED  = True         # 是否执行阶跃响应辨识
+STEP_IDENT_V_LOW    = 0.5          # 辨识阶跃起始电压 V
+STEP_IDENT_V_HIGH   = 2.5          # 辨识阶跃终止电压 V
+STEP_IDENT_COLLECT_S = 3.0         # 每次阶跃响应采集时长 s
+STEP_IDENT_REPS     = 3            # 重复辨识次数（结果取均值）
+PROTO_DELAY_REPS    = 10           # 协议延迟测量重复次数
 ```
 
 **多温度扫描示例：**
@@ -237,9 +245,12 @@ Piezo 执行器存在**机械迟滞**：在同一电压下，从低压方向接�
 | 文件 | 说明 |
 |------|------|
 | `lut_YYYYMMDD_HHMMSS.csv` | 完整 LUT 数据 |
+| `model_YYYYMMDD_HHMMSS.csv` | FOPDT 模型参数（K、τ、θ、死区电压、延迟分解） |
 | `summary_YYYYMMDD_HHMMSS.csv` | 每温度点统计摘要 |
 | `lut_partial_25C.csv` | 单温度中间结果（每温度完成后更新） |
 | `lut_YYYYMMDD_HHMMSS.log` | 完整日志（DEBUG 级别） |
+
+`model_*.csv` 与对应 `lut_*.csv` 的时间戳相同。在 MATLAB GUI 中点击 **Load LUT** 时，会自动查找同名模型文件，并将 K / τ / θ / V_dead / 噪声字段一并填入。
 
 ### 主 LUT CSV 列
 
@@ -265,6 +276,23 @@ Piezo 执行器存在**机械迟滞**：在同一电压下，从低压方向接�
 | `hysteresis_max_nm` | 最大迟滞（升/降压曲线最大差值，nm） |
 | `linearity_r2` | 升压曲线线性度 R² |
 | `sensitivity_nm_per_V` | 灵敏度（nm/V，升压曲线斜率） |
+
+### 模型 CSV 列（`model_YYYYMMDD_HHMMSS.csv`）
+
+当 `STEP_IDENT_ENABLED = True` 时，每温度点完成后自动保存。
+
+| 列 | 说明 |
+|----|------|
+| `temperature_C` | 温度（°C） |
+| `K_nm_per_V` | 静态增益（nm/V） |
+| `tau_ms` | 时间常数（ms） |
+| `theta_ms` | 总纯滞后（ms）= θ_piezo + θ_protocol |
+| `v_dead_V` | 死区电压（V）——低于此电压 Piezo 不动 |
+| `r2_fit` | FOPDT 拟合优度 R² |
+| `noise_rms_nm` | 传感器噪声 RMS（nm，从静态 LUT std_nm 估算） |
+| `theta_piezo_ms` | Piezo 机械延迟（ms）= θ_total − θ_protocol |
+| `theta_protocol_ms` | 通信协议延迟（ms）= Moku 命令 + 串口帧 + USB |
+| `timestamp` | 辨识时间（ISO 8601） |
 
 ---
 
@@ -551,97 +579,303 @@ moku.close()
 
 ---
 
-## PID 仿真 GUI
+## PID / ADRC 仿真 GUI（MATLAB）
 
-`simulate.py` 是一个独立的交互式图形界面，用于在无需任何硬件的情况下探索压电 PID 控制行为。它运行离散时间 FOPDT 仿真，内置 PI 控制器，支持实时调节所有参数。
+`simulate.m` 是一个独立的 MATLAB 交互式图形界面，用于在无需任何硬件的情况下探索压电闭环控制行为。支持两种控制器：**PID**（含滤波微分项）和 **ADRC**（自抗扰控制），并提供实时性能指标面板和可滚动操作日志。
 
 ### 启动
 
-```bash
-uv run python simulate.py
+在 MATLAB 命令行窗口中运行：
+
+```matlab
+simulate()
 ```
 
-需要 tkinter 支持（macOS 示例：`brew install python-tk@3.13`）。
+需要 MATLAB R2023b 或更新版本（使用 `uifigure`、`uigridlayout`、`uitable`）。已在 MATLAB 2026a 上测试。
+
+### 文件结构
+
+```
+simulate.m          — GUI 入口（调用 +sim 包函数）
++sim/
+  defaultParams.m   — 工厂默认参数结构体
+  runSim.m          — 离散时间 FOPDT 仿真循环（PID + ADRC）
+  makeSetpoint.m    — 目标轨迹波形发生器
+  makeDisturbance.m — 干扰波形发生器
+  computeMetrics.m  — 阶跃响应性能指标计算
+  saveConfig.m      — JSON 配置保存
+  loadConfig.m      — JSON 配置加载（回退到默认值）
+test_simulate.m     — 单元测试（直接调用 sim.* 包函数，无需打开 GUI）
+```
+
+无需打开 GUI，直接运行单元测试：
+
+```matlab
+results = runtests('test_simulate');
+table(results)
+```
 
 ### 界面布局
 
 ```
-┌─ 参数控制（左侧）────────────────────────────────────────────────────────────┐
-│  植物 (FOPDT)         K (nm/V)  τ (ms)  θ (ms)                             │
-│  PID 增益             Kp  Ki  Kd   [IMC 自动整定]                           │
-│  反馈延迟             额外延迟 (ms)                                           │
-│  目标位移             目标 (nm)                                               │
-│  干扰信号             类型 ▾   幅值 (nm)   频率 (Hz)                         │
-│  传感器噪声           RMS (nm)                                                │
-│  仿真设置             仿真时长 (s)   阶跃时刻 (s)   最大电压 (V)              │
-│  [▶ 运行仿真]  [重置]                                                         │
-└──────────────────────────────────────────────────────────────────────────────┘
-┌─ 图表（右侧）────────────────────────────────────────────────────────────────┐
-│  ┌─────────────────┐  ┌─────────────────┐                                    │
-│  │ 位移 (nm)       │  │ 定位误差 (nm)   │                                    │
-│  └─────────────────┘  └─────────────────┘                                    │
-│  ┌─────────────────┐  ┌─────────────────┐                                    │
-│  │ 控制电压 (V)    │  │ 干扰信号 (nm)   │                                    │
-│  └─────────────────┘  └─────────────────┘                                    │
-│  [matplotlib 工具栏：平移 | 缩放 | 导出 PNG/PDF/SVG]                          │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─ 参数控制（左侧，可滚动）──────────────────────┐
+│  植物（Piezo）—— 所有 Piezo 参数集中在此        │
+│    K  (nm/V)          [    410 ]               │
+│    τ  (ms)            [     80 ]               │
+│    θ_piezo (µs)       [  10000 ]               │
+│    V dead (V)         [      0 ]               │
+│    Hysteresis (nm)    [      0 ]               │
+│    Noise RMS (nm)     [      5 ]               │
+│  控制器                                         │
+│    Mode          [ PID ▼ / ADRC ]              │
+│    Kp [0.002]  Ki [0.027]  Kd [0]             │
+│    D filter N    [     20 ]                    │
+│  ADRC                                          │
+│    ω_c (rad/s)   [     20 ]                    │
+│    ω₀  (rad/s)   [    100 ]                    │
+│    Smith Predictor [ Off ▼ ]                   │
+│  反馈延迟                                       │
+│    θ_protocol (µs) [      0 ]                  │
+│  Setpoint / 干扰 / 仿真设置 …                   │
+└────────────────────────────────────────────────┘
+┌─ 图表 + 指标（右侧）──────────────────────────────────────────┐
+│  ┌───────────────────┐  ┌───────────────────┐                 │
+│  │  位移 (nm)        │  │  定位误差 (nm)    │                 │
+│  └───────────────────┘  └───────────────────┘                 │
+│  ┌───────────────────┐  ┌───────────────────┐                 │
+│  │  控制电压 (V)     │  │  干扰信号 (nm)    │                 │
+│  └───────────────────┘  └───────────────────┘                 │
+│  [▶ 运行] [IMC/ADRC 整定] [整定+运行] [重置] [Load LUT]       │
+│  [导出…]  [Save Config] [Dist on Error ☐]                      │
+│  ┌── 阶跃响应指标 ──────────────────────────────────────┐     │
+│  │  超调: 0.0%  上升: 120ms  调节时间: 250ms             │     │
+│  │  稳态 RMS: 0.8nm  IAE: 12.3nm·s  ITAE: 8.4nm·s²     │     │
+│  └──────────────────────────────────────────────────────┘     │
+│  ┌── 操作日志（可滚动）──────────────────────────────────┐     │
+│  │  09:01:02  Ready — press ▶ Run Simulation             │     │
+│  │  09:01:15  Running PID simulation  (2.0 s)…           │     │
+│  │  09:01:15  Done  |  SS RMS: 0.8 nm  — Converged ✓    │     │
+│  └──────────────────────────────────────────────────────┘     │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### 参数说明
 
+所有参数均通过数字输入框或下拉菜单填写。属于未激活控制器的字段自动变灰禁用。
+
 | 分组 | 参数 | 默认值 | 范围 |
 |------|------|--------|------|
-| 植物 | K — 静态增益 (nm/V) | 410 | 10–2000 |
-| 植物 | τ — 时间常数 (ms) | 80 | 5–500 |
-| 植物 | θ — 植物纯滞后 (ms) | 10 | 0–200 |
-| PID | Kp | 0.002 | 0–0.05 |
-| PID | Ki | 0.027 | 0–2.00 |
-| PID | Kd | 0 | 0–0.01 |
-| 反馈 | 额外传感器延迟 (ms) | 0 | 0–500 |
-| 目标 | 目标位移 (nm) | 1000 | 100–5000 |
-| 干扰 | 类型 | 无 | 无 / 高频正弦 / 低频正弦 / 周期方波 |
-| 干扰 | 幅值 (nm) | 50 | 0–500 |
-| 干扰 | 频率 (Hz) | 10 | 0.1–200 |
-| 噪声 | 传感器 RMS (nm) | 5 | 0–50 |
-| 仿真 | 仿真时长 (s) | 2.0 | 0.5–10 |
+| 植物（Piezo） | K — 静态增益 (nm/V) | 410 | 10–2000 |
+| 植物（Piezo） | τ — 时间常数 (ms) | 80 | 5–500 |
+| 植物（Piezo） | θ_piezo — 机械纯滞后 (µs) | 10000 | 0–200000 |
+| 植物（Piezo） | V dead (V) — 死区电压 | 0 | 0–5 |
+| 植物（Piezo） | Hysteresis (nm) — 迟滞 | 0 | 0–500 |
+| 植物（Piezo） | Noise RMS (nm) — 噪声 | 5 | 0–50 |
+| 控制器 | Mode — 控制模式 | PID | PID / ADRC |
+| 控制器（PID） | Kp | 0.002 | 0–0.05 |
+| 控制器（PID） | Ki | 0.027 | 0–2.00 |
+| 控制器（PID） | Kd | 0 | 0–0.10 |
+| 控制器（PID） | D filter N — 微分滤波系数 | 20 | 0–200 |
+| ADRC | ω_c (rad/s) — 控制器带宽 | 20 | 1–500 |
+| ADRC | ω₀ (rad/s) — ESO 带宽 | 100 | 1–2000 |
+| ADRC | Smith Predictor — 死时间补偿 | Off | Off / On |
+| 反馈延迟 | θ_protocol (µs) — 协议延迟 | 0 | 0–50000 |
+| Setpoint | Base DC (nm) | 0 | 0–5000 |
+| 仿真 | 仿真时长 (s) | 2.0 | 0.5–3600 |
+| 仿真 | V max (V) | 5 | 0–1000 |
+
+### Setpoint（目标轨迹）发生器
+
+**Setpoint** 分组使用波形表格。每行定义一个叠加到 Base DC 上的信号：
+
+| 列 | 说明 |
+|----|------|
+| En | 启用/禁用本行 |
+| Type | `Step` / `Sine` / `Square` / `Sawtooth` / `Triangle` / `Random` / `Noise` |
+| Amp (nm) | 信号幅值 |
+| Period (s) | 波形周期（`Step` 和 `Noise` 忽略此项） |
+| Start (s) | 信号开始时间 |
+| Dur (s) | 持续时长（0 表示持续到仿真结束） |
+
+`Random`：每隔一个 Period 随机跳变到新幅值的分段常数信号。`Noise`：每个时间步叠加标准差为 Amp 的白高斯噪声。
+
+多行信号相加后形成最终目标轨迹。使用 **+ Add SP** / **− Remove SP** 管理行数。
+
+### 干扰信号发生器
+
+**干扰** 分组使用相同的波形表格结构（无 `Step` 类型），同样支持 `Noise`。多行信号叠加后作用于植物输出。
+
+| 波形类型 | 公式 |
+|---------|------|
+| 正弦 | $A\sin(2\pi f t')$ |
+| 方波 | $A\,\operatorname{sgn}[\sin(2\pi f t')]$ |
+| 锯齿波 | $A(2\{ft'\}-1)$ |
+| 三角波 | $A(1-4\lvert\{ft'+0.25\}-0.5\rvert)$ |
+
+其中 $t' = t - t_\text{start}$，$f = 1/\text{period}$。
 
 ### 仿真模型
 
-仿真引擎采用 1 ms 植物积分步长（欧拉法）和 50 ms PID 更新周期，与实际实时控制节拍一致。
+仿真引擎采用 1 ms 植物积分步长（欧拉法）和 50 ms 控制器更新周期。
 
-**植物模型**（一阶加纯滞后 FOPDT）：
+**植物模型**（带迟滞的一阶加纯滞后 FOPDT）：
 
 $$G(s) = \frac{K\,e^{-\theta s}}{\tau s + 1}$$
 
-纯滞后通过长度为 $\lceil \theta / \Delta t_{\rm plant} \rceil$ 的循环缓冲区实现。
+纯滞后和反馈延迟均通过循环缓冲区实现。**迟滞**模型：电压升高时位移无偏移，电压降低时位移向下偏移 Hysteresis (nm)，模拟方向性机械迟滞。
 
-**额外反馈延迟**：第二个循环缓冲区在测量值到达 PID 控制器之前引入额外延迟，模拟电缆时延、滤波器滞后或通信延迟。
+#### PID 控制器（微分项作用于测量值）
 
-**干扰类型**（在阶跃时刻后叠加至植物输出）：
+微分项通过一阶滤波器作用于**测量值**（而非误差），避免目标值阶跃时的微分冲击（setpoint kick）：
 
-| 类型 | 信号公式 |
-|------|--------|
-| 高频正弦 | $d(t) = A \sin(2\pi f t)$ |
-| 低频正弦 | $d(t) = A \sin(2\pi (f/10)\, t)$ |
-| 周期方波 | $d(t) = A \operatorname{sgn}[\sin(2\pi f t)]$ |
+$$d_\text{filt}[k] = \frac{d_\text{filt}[k-1]}{1+N\,T} + \frac{K_d\,N}{1+N\,T}\,\bigl(y[k-1] - y[k]\bigr)$$
 
-**积分饱和防护**：积分累积量被限幅，确保积分项单独不会使输出超过电压上下限。
+**积分饱和防护**：积分项被限幅，防止大误差下积分器饱和。N = 0 时完全禁用微分项。
 
-### IMC 自动整定按钮
+#### ADRC 控制器（自抗扰控制，1阶）
 
-根据当前 K、τ、θ 滑块值，以 $\lambda = 2\theta$ 直接计算 IMC PI 增益：
+ADRC 将模型误差、迟滞、外部干扰等全部视为"总扰动"，通过扩张状态观测器（ESO）实时估计并主动抵消，无需精确数学模型。
 
-$$K_p = \frac{\tau}{K(\lambda + \theta)}, \quad K_i = \frac{K_p}{\tau}$$
+**所需植物参数：** $b_0 = K/\tau$ [nm/(V·s)]
 
-结果立即写回 Kp 和 Ki 滑块，再次点击 **运行仿真** 即可查看闭环响应。
+**ESO 更新** — 矩阵指数精确 ZOH 离散化（任意 ω₀ 和 DT 组合均稳定）：
+
+$$\begin{bmatrix}z_1\\z_2\end{bmatrix}_{k+1} = A_d\begin{bmatrix}z_1\\z_2\end{bmatrix}_k + B_d\begin{bmatrix}u\\y\end{bmatrix}_k, \quad A_d,B_d = \text{expm}\!\left(\begin{bmatrix}A_c & B_c\\0&0\end{bmatrix}DT\right)$$
+
+其中 $z_1 \approx y$（输出估计），$z_2 \approx$ 总扰动。
+
+**控制律（含指令微分前馈）**（消除正弦/斜坡跟踪的相位滞后）：
+
+$$u = \frac{\omega_c (r - z_1) + \dot{r} - z_2}{b_0}, \quad \dot{r} = \frac{r[k] - r[k-1]}{DT}$$
+
+加入 $\dot{r}$ 后闭环传递函数从 $\omega_c/(s+\omega_c)$ 变为近似 $1$，相位滞后几乎消除。
+
+**Smith Predictor**（Smith Predictor = On 时启用）：并联运行无死时间内部模型，将 ESO 测量量修正为：
+
+$$y_\text{eso} = y_\text{meas} + (y_\text{model} - y_\text{model,delayed})$$
+
+从 ESO 的有效死时间中去除 θ_plant，从而可以设置更高的 ω_c 而不失稳。开启后 IMC 整定会自动排除 θ_plant 的影响。
+
+**调参建议：**
+- 初始推荐：$\omega_c = 1/(\tau + \theta)$，$\omega_0 = 5\,\omega_c$
+- 增大 $\omega_0$ 可加快扰动抑制；若噪声被放大则适当减小
+- 增大 $\omega_c$ 可加快跟踪；若控制电压频繁饱和则适当减小
+- 当 θ_piezo/τ > 0.3 时建议开启 Smith Predictor
+
+### 性能指标面板
+
+每次仿真运行后，指标面板自动显示阶跃响应质量数据：
+
+| 指标 | 定义 |
+|------|------|
+| 超调 (%) | $(y_\text{峰值} - y_\text{目标}) / \|y_\text{阶跃}\| \times 100$ |
+| 上升时间 (ms) | 从阶跃幅值 10% 到 90% 所需的时间 |
+| 调节时间 (ms) | 输出最后一次离开 ±2% 误差带的时刻 |
+| 稳态 RMS 误差 (nm) | 仿真最后 10% 时段内误差的 RMS 值 |
+| IAE (nm·s) | $\int_0^T \|e(t)\|\,dt$，累积绝对误差 |
+| ITAE (nm·s²) | $\int_0^T t\,\|e(t)\|\,dt$，对后期误差加权更重 |
+
+IAE/ITAE 越小，整体跟踪性能越好。ITAE 对收敛慢的惩罚力度大于 IAE。
+
+### 可滚动操作日志
+
+仿真运行、自动整定结果、Load LUT 消息、导出路径及错误信息全部追加到右侧底部带时间戳的日志窗口中，保留完整的会话历史记录，方便回顾参数扫描过程。
+
+### 按钮说明
+
+| 按钮 | 功能 |
+|------|------|
+| ▶ 运行仿真 | 运行仿真并自动计算、显示性能指标 |
+| IMC/ADRC 整定 | **PID 模式：** IMC 规则计算 Kp、Ki。**ADRC 模式：** 计算 ω_c = 1/(τ+θ_eff)，ω₀ = 5ω_c；Smith Predictor 开启时自动排除 θ_plant |
+| Auto-tune + Run | 先自动整定，然后立即运行仿真 |
+| 重置 | 恢复所有参数为出厂默认值 |
+| Load LUT… | 加载 `lut_*.csv`；自动查找 `model_*.csv` → 填入 K / τ / θ_piezo / θ_protocol / V_dead / 噪声；自动查找 `summary_*.csv` → 填入迟滞值 |
+| 导出… | 将图表保存为 PNG / PDF / SVG / EPS |
+| Save Config | 手动保存当前所有参数到 `simulate_config.json` |
+| Dist on Error ☐ | 在定位误差图上叠加显示干扰信号，直观观察干扰对误差的影响 |
+
+### 参数配置文件持久化
+
+所有参数会自动保存到与 `simulate.m` 同目录的 `simulate_config.json` 文件中。触发时机：
+
+- 点击 **Save Config** 按钮（手动保存）
+- 点击窗口右上角 × 关闭 GUI（自动保存）
+
+下次运行 `simulate()` 时自动加载，无需重新填写参数。
+
+JSON 文件可读性良好，可手动编辑或纳入版本控制：
+
+```json
+{
+  "K": 410,
+  "tau_ms": 80,
+  "theta_us": 8500,
+  "v_dead": 0.15,
+  "hysteresis_nm": 35.0,
+  "noise": 5,
+  "ctrl_mode": "ADRC",
+  "kp": 0.00217,
+  "ki": 0.02708,
+  "kd": 0.0,
+  "d_filter_n": 20,
+  "adrc_wc": 20,
+  "adrc_w0": 100,
+  "smith_adrc": false,
+  "delay_us": 3800,
+  "dt_pid_us": 50000,
+  "sp_dc": 0,
+  "v_max": 5,
+  "t_total": 2.0,
+  "setpoints": [
+    {"en": true, "type": "Step", "amp": 1000, "period": 1.0, "t0": 0.1, "dur": 0.0}
+  ],
+  "signals": []
+}
+```
+
+> **向后兼容：** 旧版配置文件中的 `theta_ms`（毫秒）和 `dt_pid_ms` 字段在加载时自动乘以 1000 转换为 `theta_us` / `dt_pid_us`（微秒）。
+
+恢复出厂默认值：点击 **重置** 后再点 **Save Config**，或直接删除 `simulate_config.json`。
+
+### 延迟分解与 Load LUT 映射
+
+加载 `lut_*.csv` 时：
+
+- 若同名 `model_*.csv` 存在且包含延迟分解字段，GUI 自动填入：
+  - **θ_piezo (ms)** ← `theta_piezo_ms`（Piezo 机械延迟）
+  - **θ_protocol (µs)** ← `theta_protocol_ms × 1000`（Moku 命令 + 串口帧 + USB 延迟）
+- 若同名 `summary_*.csv` 存在，GUI 自动读取 `hysteresis_max_nm`（各温度均值）并填入 **Hysteresis (nm)** 字段
+- 若模型文件为旧格式（无延迟分解列），则将 `theta_ms` 整体填入 θ_piezo 作为保守回退值
+
+### 自动整定公式
+
+整定逻辑封装在 `+sim/imcTune.m`（Rivera et al. 1986）。
+
+IMC 公式需要回路中**所有延迟之和**作为有效死区时间：
+
+$$\theta_\text{eff} = \underbrace{\theta_\text{plant}}_{\text{p.theta\_us}} + \underbrace{\theta_\text{sensor}}_{\text{p.delay\_us}} + \underbrace{DT/2}_{\text{p.dt\_pid\_us}/2}$$
+
+其中 $DT/2$ 是离散控制器的 ZOH 等效死区——控制器更新越慢、传感器延迟越大，有效死区越大，整定出的增益越保守（越小），系统越稳定。
+
+**Smith Predictor 开启时**，ADRC 的有效死区排除 θ_plant（由预估器补偿），可以整定出更高的带宽：
+
+$$\theta_\text{eff,ADRC} = \theta_\text{sensor} + DT/2 \quad (\text{Smith 开启})$$
+
+**PID — 完整 IMC-PID（含微分项，λ = 2θ_eff）：**
+
+$$K_p = \frac{\tau + \theta_\text{eff}/2}{K(\lambda + \theta_\text{eff}/2)}, \quad K_i = \frac{K_p}{\tau + \theta_\text{eff}/2}, \quad K_d = K_p \cdot \frac{\tau\theta_\text{plant}}{2\tau+\theta_\text{plant}}, \quad N = \left\lfloor\frac{2\tau+\theta_\text{plant}}{\theta_\text{plant}}\right\rceil$$
+
+当 θ_plant = 0 时，K_d 自动为 0。
+
+**ADRC：**
+
+$$\omega_c = \frac{1}{\tau + \theta}, \quad \omega_0 = 5\,\omega_c$$
+
+整定结果同时写入四个 PID 参数字段（Kp、Ki、Kd、N），并记录到操作日志。
 
 ### 图表导出
 
-使用图表底部的 matplotlib 导航工具栏：
-
-- **软盘图标** → 保存对话框（支持 PNG、PDF、SVG、EPS）
-- **放大镜图标** → 区域缩放
-- **平移图标** → 拖拽平移
+点击 **导出…** 打开保存对话框，支持格式：PNG（300 dpi）、PDF、SVG、EPS。底层调用 MATLAB 的 `exportgraphics` 函数。
 
 ---
 

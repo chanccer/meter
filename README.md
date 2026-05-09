@@ -146,6 +146,14 @@ AUTOTUNE_V_HIGH     = 2.5          # Step test end voltage (V)
 AUTOTUNE_COLLECT_S  = 3.0          # Step response collection duration (s)
 AUTOTUNE_METHOD     = "IMC"        # Tuning method: 'IMC' (recommended) or 'ZN'
 AUTOTUNE_LAMBDA     = 1.0          # IMC closed-loop time constant multiplier (larger = more conservative)
+
+# Model identification (runs automatically after each temperature sweep)
+STEP_IDENT_ENABLED  = True         # Run step-response identification after each temperature
+STEP_IDENT_V_LOW    = 0.5          # Identification step start voltage (V)
+STEP_IDENT_V_HIGH   = 2.5          # Identification step end voltage (V)
+STEP_IDENT_COLLECT_S = 3.0         # Collection duration per repetition (s)
+STEP_IDENT_REPS     = 3            # Repetitions — results are averaged
+PROTO_DELAY_REPS    = 10           # Repetitions for protocol delay measurement
 ```
 
 **Multi-temperature example:**
@@ -237,9 +245,12 @@ All files are written to `OUTPUT_DIR` (default `./lut_output/`):
 | File | Description |
 |------|-------------|
 | `lut_YYYYMMDD_HHMMSS.csv` | Complete LUT data |
+| `model_YYYYMMDD_HHMMSS.csv` | FOPDT model parameters (K, τ, θ, dead-band, delay breakdown) |
 | `summary_YYYYMMDD_HHMMSS.csv` | Per-temperature statistics summary |
 | `lut_partial_25C.csv` | Intermediate results (updated after each temperature) |
 | `lut_YYYYMMDD_HHMMSS.log` | Full log file (DEBUG level) |
+
+The `model_*.csv` file shares the same timestamp as the corresponding `lut_*.csv`. When you click **Load LUT** in the MATLAB GUI, the companion model file is auto-detected and used to populate the Plant K / τ / θ / V_dead / noise fields.
 
 ### Main LUT CSV columns
 
@@ -265,6 +276,23 @@ All files are written to `OUTPUT_DIR` (default `./lut_output/`):
 | `hysteresis_max_nm` | Maximum hysteresis between up/down curves (nm) |
 | `linearity_r2` | R² of the up-sweep linear fit |
 | `sensitivity_nm_per_V` | Sensitivity (nm/V, slope of up-sweep) |
+
+### Model CSV columns (`model_YYYYMMDD_HHMMSS.csv`)
+
+Saved automatically after each temperature point when `STEP_IDENT_ENABLED = True`.
+
+| Column | Description |
+|--------|-------------|
+| `temperature_C` | Temperature (°C) |
+| `K_nm_per_V` | Static gain (nm/V) |
+| `tau_ms` | Time constant (ms) |
+| `theta_ms` | Total dead time (ms) — θ_piezo + θ_protocol |
+| `v_dead_V` | Dead-band voltage (V) — minimum voltage before Piezo moves |
+| `r2_fit` | FOPDT fit quality R² |
+| `noise_rms_nm` | Sensor noise RMS (nm, estimated from static LUT std_nm) |
+| `theta_piezo_ms` | Estimated Piezo-only mechanical delay (ms) |
+| `theta_protocol_ms` | Estimated protocol delay (ms) — Moku command + serial frame + USB |
+| `timestamp` | Identification time (ISO 8601) |
 
 ---
 
@@ -321,7 +349,9 @@ $$G(s) = \frac{K \, e^{-\theta s}}{\tau s + 1}$$
 |--------|------|-----------------|
 | K | nm/V | Static (DC) gain — how many nm per volt at steady state |
 | τ | s | Time constant — speed of the exponential approach to steady state (mechanical + electrical) |
-| θ | s | Dead time — lumped delay from serial latency (~1 ms), PID loop interval, and Piezo mechanical lag |
+| θ | s | Total dead time — θ_piezo (mechanical lag) + θ_protocol (Moku command + serial frame + USB polling) |
+
+The script measures θ_protocol separately via `measure_protocol_delay()` (N repeated no-op Moku commands + frame arrival timing), then computes θ_piezo = θ_total − θ_protocol. Both are stored in the model CSV so you can set the MATLAB simulation's **θ plant DT** to θ_piezo and **Sensor delay** to θ_protocol for the most accurate closed-loop model.
 
 The corresponding step response (voltage jumps by ΔV at t = 0) is:
 
@@ -551,97 +581,298 @@ moku.close()
 
 ---
 
-## PID Simulation GUI
+## PID / ADRC Simulation GUI (MATLAB)
 
-`simulate.py` is a standalone interactive GUI for exploring Piezo PID behaviour without hardware. It runs a discrete-time FOPDT simulation with a PI controller and lets you tune every parameter in real time.
+`simulate.m` is a standalone MATLAB interactive GUI for exploring Piezo closed-loop behaviour without hardware. It simulates a discrete-time FOPDT plant with two controller choices — **PID** (with filtered derivative) and **ADRC** (Active Disturbance Rejection Control) — plus a live performance-metrics panel and a scrollable log.
 
 ### Launch
 
-```bash
-uv run python simulate.py
+Open MATLAB and run:
+
+```matlab
+simulate()
 ```
 
-Requires tkinter (install `python-tk` for your Python version, e.g. `brew install python-tk@3.13` on macOS).
+Requires MATLAB R2023b or later (uses `uifigure`, `uigridlayout`, `uitable`). Tested with MATLAB 2026a.
+
+### File structure
+
+```
+simulate.m          — GUI entry point (calls +sim package functions)
++sim/
+  defaultParams.m   — factory-default parameter struct
+  runSim.m          — discrete-time FOPDT simulation loop (PID + ADRC)
+  makeSetpoint.m    — setpoint waveform generator
+  makeDisturbance.m — disturbance waveform generator
+  computeMetrics.m  — step-response performance metrics
+  saveConfig.m      — JSON config save
+  loadConfig.m      — JSON config load (falls back to defaults)
+test_simulate.m     — unit test suite (call sim.* package functions directly)
+```
+
+Run unit tests without opening the GUI:
+
+```matlab
+results = runtests('test_simulate');
+table(results)
+```
 
 ### Interface layout
 
 ```
-┌─ Controls (left) ──────────────────────────────────────────────────────────┐
-│  Plant (FOPDT)        K (nm/V)  τ (ms)  θ (ms)                            │
-│  PID Gains            Kp  Ki  Kd   [IMC Auto-tune]                         │
-│  Feedback Delay       Extra delay (ms)                                      │
-│  Setpoint             Target displacement (nm)                              │
-│  Disturbance          Type ▾   Amplitude (nm)   Freq (Hz)                  │
-│  Sensor Noise         RMS (nm)                                              │
-│  Simulation           Duration (s)   Step time (s)   V max (V)             │
-│  [▶ Run Simulation]  [Reset]                                                │
-└────────────────────────────────────────────────────────────────────────────┘
-┌─ Plots (right) ────────────────────────────────────────────────────────────┐
-│  ┌──────────────────┐  ┌──────────────────┐                                │
-│  │ Displacement (nm)│  │ Positioning Error │                                │
-│  └──────────────────┘  └──────────────────┘                                │
-│  ┌──────────────────┐  ┌──────────────────┐                                │
-│  │ Control Voltage  │  │ Disturbance (nm) │                                │
-│  └──────────────────┘  └──────────────────┘                                │
-│  [matplotlib toolbar: pan | zoom | save PNG/PDF/SVG]                       │
-└────────────────────────────────────────────────────────────────────────────┘
+┌─ Parameters (left, scrollable) ──────────────────┐
+│  Plant (Piezo)                                    │
+│    K  (nm/V)          [    410 ]                  │
+│    τ  (ms)            [     80 ]                  │
+│    θ_piezo (µs)       [  10000 ]                  │
+│    V dead (V)         [      0 ]                  │
+│    Hysteresis (nm)    [      0 ]                  │
+│    Noise RMS (nm)     [      5 ]                  │
+│  Controller                                       │
+│    Mode          [ PID ▼ / ADRC ]                 │
+│    Kp  [ 0.002 ]  Ki  [ 0.027 ]  Kd  [ 0 ]       │
+│    D filter N    [     20 ]                       │
+│  ADRC                                             │
+│    ω_c (rad/s)   [     20 ]                       │
+│    ω₀  (rad/s)   [    100 ]                       │
+│    Smith Predictor [ Off ▼ ]                      │
+│  Feedback Delay                                   │
+│    θ_protocol (µs) [      0 ]                     │
+│  Setpoint / Disturbance / Simulation …            │
+└──────────────────────────────────────────────────┘
+┌─ Plots + Metrics (right) ───────────────────────────────────────┐
+│  ┌────────────────────┐  ┌────────────────────┐                 │
+│  │  Displacement (nm) │  │  Positioning Error │                 │
+│  └────────────────────┘  └────────────────────┘                 │
+│  ┌────────────────────┐  ┌────────────────────┐                 │
+│  │  Control Voltage   │  │  Disturbance (nm)  │                 │
+│  └────────────────────┘  └────────────────────┘                 │
+│  [▶ Run] [IMC/ADRC Auto-tune] [Auto-tune+Run] [Reset] [Load LUT]│
+│  [Export…] [Save Config] [Dist on Error ☐]                      │
+│  ┌── Step Response Metrics ────────────────────────────────┐    │
+│  │  Overshoot: 0.0%   Rise: 120 ms   Settling: 250 ms      │    │
+│  │  SS RMS: 0.8 nm    IAE: 12.3 nm·s   ITAE: 8.4 nm·s²    │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│  ┌── Log ──────────────────────────────────────────────────┐    │
+│  │  09:01:02  Ready — press ▶ Run Simulation               │    │
+│  │  09:01:15  Running PID simulation  (2.0 s)…             │    │
+│  │  09:01:15  Done  |  SS RMS: 0.8 nm  — Converged ✓      │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Parameters
 
+All parameters are numeric input fields or drop-downs. Fields that belong to the inactive controller (PID vs. ADRC) are automatically greyed out.
+
 | Section | Parameter | Default | Range |
 |---------|-----------|---------|-------|
-| Plant | K — static gain (nm/V) | 410 | 10–2000 |
-| Plant | τ — time constant (ms) | 80 | 5–500 |
-| Plant | θ — plant dead time (ms) | 10 | 0–200 |
-| PID | Kp | 0.002 | 0–0.05 |
-| PID | Ki | 0.027 | 0–2.00 |
-| PID | Kd | 0 | 0–0.01 |
-| Feedback | Extra sensor delay (ms) | 0 | 0–500 |
-| Setpoint | Target displacement (nm) | 1000 | 100–5000 |
-| Disturbance | Type | none | none / high-freq sine / low-freq sine / periodic square |
-| Disturbance | Amplitude (nm) | 50 | 0–500 |
-| Disturbance | Frequency (Hz) | 10 | 0.1–200 |
-| Noise | Sensor RMS (nm) | 5 | 0–50 |
-| Simulation | Duration (s) | 2.0 | 0.5–10 |
+| Plant (Piezo) | K — static gain (nm/V) | 410 | 10–2000 |
+| Plant (Piezo) | τ — time constant (ms) | 80 | 5–500 |
+| Plant (Piezo) | θ_piezo — mechanical dead time (µs) | 10000 | 0–200000 |
+| Plant (Piezo) | V dead (V) — dead-band voltage | 0 | 0–5 |
+| Plant (Piezo) | Hysteresis (nm) | 0 | 0–500 |
+| Plant (Piezo) | Noise RMS (nm) | 5 | 0–50 |
+| Controller | Mode | PID | PID / ADRC |
+| Controller (PID) | Kp | 0.002 | 0–0.05 |
+| Controller (PID) | Ki | 0.027 | 0–2.00 |
+| Controller (PID) | Kd | 0 | 0–0.10 |
+| Controller (PID) | D filter N | 20 | 0–200 |
+| ADRC | ω_c (rad/s) — controller bandwidth | 20 | 1–500 |
+| ADRC | ω₀ (rad/s) — ESO bandwidth | 100 | 1–2000 |
+| ADRC | Smith Predictor — dead-time compensation | Off | Off / On |
+| Feedback Delay | θ_protocol (µs) — sensor + protocol latency | 0 | 0–50000 |
+| Setpoint | Base DC (nm) | 0 | 0–5000 |
+| Simulation | Duration (s) | 2.0 | 0.5–3600 |
+| Simulation | V max (V) | 5 | 0–1000 |
+
+### Setpoint generator
+
+The **Setpoint** section uses a waveform table. Each row defines one signal added on top of the base DC offset:
+
+| Column | Description |
+|--------|-------------|
+| En | Enable/disable this row |
+| Type | `Step` / `Sine` / `Square` / `Sawtooth` / `Triangle` / `Random` / `Noise` |
+| Amp (nm) | Signal amplitude |
+| Period (s) | Waveform period (`Step` and `Noise` ignore this) |
+| Start (s) | Time at which signal begins |
+| Dur (s) | Duration (0 = until end of simulation) |
+
+`Random` generates a piecewise-constant random signal that changes value every period. `Noise` adds white Gaussian noise at every timestep with standard deviation equal to Amp.
+
+Multiple rows are summed to form the final setpoint trajectory. Use **+ Add SP** / **− Remove SP** to manage rows.
+
+### Disturbance generator
+
+The **Disturbance** section uses the same waveform table schema (without `Step` type), including `Noise`. Multiple rows are summed to produce a complex disturbance signal applied at the plant output.
+
+| Type | Waveform |
+|------|----------|
+| Sine | $A\sin(2\pi f t')$ |
+| Square | $A\,\operatorname{sgn}[\sin(2\pi f t')]$ |
+| Sawtooth | $A(2\{ft'\}-1)$ |
+| Triangle | $A(1-4\lvert\{ft'+0.25\}-0.5\rvert)$ |
+
+where $t' = t - t_\text{start}$ and $f = 1/\text{period}$.
 
 ### Simulation model
 
-The simulation engine uses a 1 ms plant integration step (Euler method) with a 50 ms PID update interval — matching the typical real-time loop cadence.
+The simulation engine uses a 1 ms plant integration step (Euler method) with a 50 ms controller update interval.
 
-**Plant** (first-order plus dead time):
+**Plant** (first-order plus dead time with hysteresis):
 
 $$G(s) = \frac{K\,e^{-\theta s}}{\tau s + 1}$$
 
-Dead time is implemented as a circular delay buffer of length $\lceil \theta / \Delta t_{\rm plant} \rceil$.
+Dead time and feedback delay are each implemented as circular delay buffers. **Hysteresis** is modelled as a directional displacement offset: when voltage is increasing no offset is applied; when voltage is decreasing, the output is shifted by −Hysteresis (nm).
 
-**Additional feedback delay**: a second circular buffer delays the sensor measurement before it reaches the PID controller, simulating cable latency, filter lag, or slow communication.
+#### PID controller (D filtered on measurement)
 
-**Disturbance types** (applied at plant output, starting at `Step time`):
+The derivative term uses a first-order low-pass filter on the **measurement** (not the error), avoiding the setpoint kick that results from a raw derivative:
 
-| Type | Signal |
-|------|--------|
-| high-freq sine | $d(t) = A \sin(2\pi f t)$ |
-| low-freq sine | $d(t) = A \sin(2\pi (f/10)\, t)$ |
-| periodic square | $d(t) = A \operatorname{sgn}[\sin(2\pi f t)]$ |
+$$C_d(s) = \frac{K_d N}{s + N}$$
 
-**Anti-windup**: the integrator accumulation is clamped so that the integral term alone cannot saturate the output beyond the voltage limits.
+Discrete update (applied to measured output `yMeas`):
 
-### IMC Auto-tune button
+$$d_\text{filt}[k] = \frac{d_\text{filt}[k-1]}{1+N\,T} + \frac{K_d\,N}{1+N\,T}\,\bigl(y[k-1] - y[k]\bigr)$$
 
-Computes IMC PI gains directly from the current slider values (K, τ, θ) with $\lambda = 2\theta$:
+**Anti-windup** clamps the integrator so the integral term alone cannot saturate the output. Setting N = 0 disables the D term entirely.
 
-$$K_p = \frac{\tau}{K(\lambda + \theta)}, \quad K_i = \frac{K_p}{\tau}$$
+#### ADRC controller (1st-order)
 
-The result is written back to the Kp and Ki sliders immediately, so you can press **Run Simulation** again to see the closed-loop response.
+Active Disturbance Rejection Control treats the combined effect of model mismatch, hysteresis, and external disturbances as a single "total disturbance" that the Extended State Observer (ESO) estimates and cancels in real time.
 
-### Chart export
+**Plant parameter needed:** $b_0 = K/\tau$ [nm/(V·s)]
 
-Use the matplotlib navigation toolbar at the bottom of the plot panel:
+**ESO update** — exact ZOH discretization via matrix exponential (stable for any ω₀ and DT combination):
 
-- **Floppy disk icon** → Save dialog (PNG, PDF, SVG, EPS)
-- **Magnifier icon** → Zoom to region
-- **Pan icon** → Pan / scroll
+$$\begin{bmatrix}z_1\\z_2\end{bmatrix}_{k+1} = A_d\begin{bmatrix}z_1\\z_2\end{bmatrix}_k + B_d\begin{bmatrix}u\\y\end{bmatrix}_k, \quad A_d,B_d = \text{expm}\!\left(\begin{bmatrix}A_c & B_c\\0&0\end{bmatrix}DT\right)$$
+
+where $A_c = \begin{bmatrix}-2\omega_0 & 1\\-\omega_0^2 & 0\end{bmatrix}$, $B_c = \begin{bmatrix}b_0 & 2\omega_0\\0 & \omega_0^2\end{bmatrix}$ and $z_1 \approx y$, $z_2 \approx$ total disturbance.
+
+**Control law with setpoint derivative feedforward** (cancels first-order tracking lag):
+
+$$u = \frac{\omega_c (r - z_1) + \dot{r} - z_2}{b_0}, \quad \dot{r} = \frac{r[k] - r[k-1]}{DT}$$
+
+The $\dot{r}$ term changes the closed-loop transfer function from $\omega_c/(s+\omega_c)$ to approximately $1$, eliminating the phase lag that would otherwise appear when tracking sinusoidal or ramp references.
+
+**Smith Predictor** (enabled with Smith Predictor = On): runs a dead-time-free internal model in parallel and corrects the ESO measurement:
+
+$$y_\text{eso} = y_\text{meas} + (y_\text{model} - y_\text{model,delayed})$$
+
+This removes θ_plant from the ESO's effective dead time, allowing a higher ω_c without instability. IMC Auto-tune automatically adjusts ω_c when Smith Predictor is On.
+
+**Tuning guidelines:**
+- Start with $\omega_c = 1/(\tau + \theta)$ and $\omega_0 = 5\,\omega_c$
+- Increase $\omega_0$ for faster disturbance rejection; decrease if the ESO amplifies noise
+- Increase $\omega_c$ for faster tracking; decrease if the control voltage saturates
+- Enable Smith Predictor when θ_piezo is large relative to τ (θ/τ > 0.3)
+
+### Performance metrics panel
+
+After each simulation run, the metrics panel displays step-response quality measures computed over the full trajectory:
+
+| Metric | Definition |
+|--------|-----------|
+| Overshoot (%) | $(y_\text{peak} - y_\text{ref}) / \|y_\text{step}\| \times 100$ |
+| Rise time (ms) | Time from 10% to 90% of the step amplitude |
+| Settling time (ms) | Last time the output leaves the ±2% band |
+| SS RMS error (nm) | RMS of tracking error over final 10% of simulation |
+| IAE (nm·s) | $\int_0^T \|e(t)\|\,dt$ — cumulative absolute error |
+| ITAE (nm·s²) | $\int_0^T t\,\|e(t)\|\,dt$ — weights late errors more heavily |
+
+Lower IAE/ITAE values indicate better overall tracking. ITAE penalises slow convergence more strongly than IAE.
+
+### Scrollable log
+
+All simulation events — run start, auto-tune results, load LUT messages, export paths, and errors — are appended to a timestamped scrollable log at the bottom of the right panel. The log retains the full session history, so you can review a sequence of parameter sweeps without losing earlier entries.
+
+### Buttons
+
+| Button | Action |
+|--------|--------|
+| ▶ Run Simulation | Run simulation with current parameters; compute and display metrics |
+| IMC Auto-tune | **PID mode:** compute Kp, Ki from IMC rules (λ = 2θ). **ADRC mode:** compute ω_c = 1/(τ+θ_eff), ω₀ = 5ω_c; if Smith Predictor is On, θ_plant is excluded from θ_eff |
+| Auto-tune + Run | Auto-tune then immediately run simulation |
+| Reset | Restore all parameters to factory defaults |
+| Load LUT… | Load a `lut_*.csv`; auto-detects `model_*.csv` → fills K / τ / θ_piezo / θ_protocol / V_dead / noise; auto-detects `summary_*.csv` → fills Hysteresis |
+| Export… | Save figure as PNG / PDF / SVG / EPS |
+| Save Config | Manually save all current parameters to `simulate_config.json` |
+| Dist on Error ☐ | Overlay the disturbance signal on the Positioning Error plot for visual correlation |
+
+### Config file persistence
+
+All parameters are automatically persisted to `simulate_config.json` in the same directory as `simulate.m`. The file is written every time the GUI closes (via the window X button) and when **Save Config** is clicked. On next launch, `simulate()` loads the JSON and restores all parameters — no manual re-entry required.
+
+The file is human-readable JSON:
+
+```json
+{
+  "K": 410,
+  "tau_ms": 80,
+  "theta_us": 8500,
+  "v_dead": 0.15,
+  "hysteresis_nm": 35.0,
+  "noise": 5,
+  "ctrl_mode": "ADRC",
+  "kp": 0.00217,
+  "ki": 0.02708,
+  "kd": 0.0,
+  "d_filter_n": 20,
+  "adrc_wc": 20,
+  "adrc_w0": 100,
+  "smith_adrc": false,
+  "delay_us": 3800,
+  "dt_pid_us": 50000,
+  "sp_dc": 0,
+  "v_max": 5,
+  "t_total": 2.0,
+  "setpoints": [
+    {"en": true, "type": "Step", "amp": 1000, "period": 1.0, "t0": 0.1, "dur": 0.0}
+  ],
+  "signals": []
+}
+```
+
+> **Backward compatibility:** Config files written by older versions that contain `theta_ms` (milliseconds) or `dt_pid_ms` are automatically migrated to `theta_us` / `dt_pid_us` (×1000) on load.
+
+To reset to factory defaults: click **Reset** then **Save Config**, or simply delete `simulate_config.json`.
+
+### Delay decomposition and Load LUT
+
+When you load a `lut_*.csv` and a matching `model_*.csv` is present, the GUI automatically assigns:
+- **θ_piezo (ms)** ← `theta_piezo_ms` — mechanical-only Piezo delay
+- **θ_protocol (µs)** ← `theta_protocol_ms × 1000` — Moku command + serial frame + USB latency
+
+If a companion `summary_*.csv` is found, the GUI also reads `hysteresis_max_nm` (average across temperatures) and populates the **Hysteresis (nm)** field.
+
+If the model file lacks the decomposed columns (older format), the total `theta_ms` is placed into θ_piezo as a conservative fallback.
+
+### Auto-tune formulas
+
+Implemented in `+sim/imcTune.m` (Rivera et al. 1986).
+
+The IMC formula requires the **total effective dead time** — the sum of every delay in the closed loop:
+
+$$\theta_\text{eff} = \underbrace{\theta_\text{plant}}_{\text{p.theta\_us}} + \underbrace{\theta_\text{sensor}}_{\text{p.delay\_us}} + \underbrace{DT/2}_{\text{p.dt\_pid\_us}/2}$$
+
+The ZOH term $DT/2$ accounts for the fact that a discrete controller that updates every $DT$ seconds introduces the equivalent of a half-step dead time. Larger $DT$ → larger $\theta_\text{eff}$ → more conservative (lower) gains.
+
+When **Smith Predictor is On**, the ADRC effective dead time excludes θ_plant (which is predicted away):
+
+$$\theta_\text{eff,ADRC} = \theta_\text{sensor} + DT/2 \quad (\text{Smith On})$$
+
+**PID — full IMC-PID including derivative (λ = 2θ_eff):**
+
+$$K_p = \frac{\tau + \theta_\text{eff}/2}{K(\lambda + \theta_\text{eff}/2)}, \quad K_i = \frac{K_p}{\tau + \theta_\text{eff}/2}, \quad K_d = K_p \cdot \frac{\tau\theta_\text{plant}}{2\tau+\theta_\text{plant}}, \quad N = \left\lfloor\frac{2\tau+\theta_\text{plant}}{\theta_\text{plant}}\right\rceil$$
+
+When θ_plant = 0, K_d = 0 automatically. Adding sensor delay or slowing the controller always reduces the tuned gains.
+
+**ADRC:**
+
+$$\omega_c = \frac{1}{\tau + \theta}, \quad \omega_0 = 5\,\omega_c$$
+
+All four PID fields (Kp, Ki, Kd, N) are written simultaneously. Results appear immediately in the left panel and in the scrollable log.
 
 ---
 
