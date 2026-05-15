@@ -69,20 +69,20 @@ uv run python main.py --load lut_output/lut_20250506_143022.csv
 
 Skips acquisition and loads a previously saved CSV file, then demonstrates forward and inverse interpolation queries.
 
-### PID closed-loop positioning
+### Closed-loop positioning
 
 ```bash
 # Drive Piezo to 1000 nm (no feedforward — starts from V_START, pure PI control)
-uv run python main.py --pid 1000
+uv run python main.py --goto 1000
 
 # Recommended: add LUT feedforward for fast, accurate convergence
-uv run python main.py --pid 1000 --load lut_output/lut_20250506_143022.csv
+uv run python main.py --goto 1000 --load lut_output/lut_20250506_143022.csv
 
 # Specify temperature for LUT lookup (default 25 °C)
-uv run python main.py --pid 1000 --load lut_xxx.csv --pid-temp 30
+uv run python main.py --goto 1000 --load lut_xxx.csv --temp 30
 
-# Simulate PID without hardware
-uv run python main.py --pid 1000 --load lut_xxx.csv --dry-run
+# Simulate without hardware
+uv run python main.py --goto 1000 --load lut_xxx.csv --dry-run
 ```
 
 ### ADRC closed-loop positioning
@@ -91,16 +91,16 @@ ADRC (Active Disturbance Rejection Control) uses an Extended State Observer (ESO
 
 ```bash
 # ADRC with Smith Predictor (default, recommended when θ_piezo is significant)
-uv run python main.py --pid 1000 --controller adrc
+uv run python main.py --goto 1000 --controller adrc
 
 # ADRC without Smith Predictor
-uv run python main.py --pid 1000 --controller adrc --no-smith
+uv run python main.py --goto 1000 --controller adrc --no-smith
 
 # ADRC + LUT feedforward
-uv run python main.py --pid 1000 --controller adrc --load lut_output/lut_xxx.csv
+uv run python main.py --goto 1000 --controller adrc --load lut_output/lut_xxx.csv
 
 # Simulate ADRC without hardware
-uv run python main.py --pid 1000 --controller adrc --dry-run
+uv run python main.py --goto 1000 --controller adrc --dry-run
 ```
 
 ADRC mode automatically runs `identify_model()` (step-response identification) before the control loop to determine plant parameters K, τ, and θ. If identification fails, it falls back to PID mode.
@@ -109,13 +109,13 @@ ADRC mode automatically runs `identify_model()` (step-response identification) b
 
 ```bash
 # Auto-tune PID gains, then drive to 1000 nm
-uv run python main.py --pid 1000 --autotune
+uv run python main.py --goto 1000 --autotune
 
 # Auto-tune + LUT feedforward (best accuracy)
-uv run python main.py --pid 1000 --autotune --load lut_output/lut_20250506_143022.csv
+uv run python main.py --goto 1000 --autotune --load lut_output/lut_20250506_143022.csv
 
 # Simulate auto-tuning (no hardware)
-uv run python main.py --pid 1000 --autotune --dry-run
+uv run python main.py --goto 1000 --autotune --dry-run
 ```
 
 `--autotune` runs a step-response identification test before PID positioning. It automatically computes `Kp` and `Ki` from the measured plant dynamics — no manual tuning required. The identified gains apply for the current session; copy them to `main.py` to make them permanent.
@@ -127,17 +127,17 @@ The controller outputs the current voltage, measured displacement, and positioni
 Run LUT acquisition and closed-loop positioning in a single command. The LUT path is passed automatically as feedforward — no `--load` needed.
 
 ```bash
-# Acquire LUT, then PID-position to 1000 nm with feedforward
-uv run python main.py --acquire --pid 1000
+# Acquire LUT, then position to 1000 nm with feedforward (PID)
+uv run python main.py --acquire --goto 1000
 
 # Acquire LUT, then ADRC-position to 1000 nm
-uv run python main.py --acquire --pid 1000 --controller adrc
+uv run python main.py --acquire --goto 1000 --controller adrc
 
 # Full pipeline (dry-run simulation, no hardware)
-uv run python main.py --acquire --pid 1000 --dry-run
+uv run python main.py --acquire --goto 1000 --dry-run
 ```
 
-`--acquire` requires `--pid`. After acquisition completes the freshly saved LUT is loaded automatically as the feedforward starting point for the control loop.
+`--acquire` requires `--goto`. After acquisition completes the freshly saved LUT is loaded automatically as the feedforward starting point for the control loop.
 
 ### Trajectory tracking (`--trajectory`)
 
@@ -280,8 +280,8 @@ uv run python main.py --v-step 0.05
 # Custom range and step together
 uv run python main.py --v-start 0.2 --v-end 4.5 --v-step 0.05
 
-# Voltage limits also clamp the controller output during PID/ADRC positioning
-uv run python main.py --pid 1000 --v-start 0.2 --v-end 4.5
+# Voltage limits also clamp the controller output during positioning
+uv run python main.py --goto 1000 --v-start 0.2 --v-end 4.5
 ```
 
 `V_STEP` is a user-chosen LUT grid density, not the Moku DAC hardware resolution. The Moku:Go Waveform Generator is 16-bit over ±5 V (≈ 0.15 mV precision), so any step ≥ 1 mV is well within hardware capability. `V_START` and `V_END` default to 0–5 V to match the Moku single-ended output range, but should be narrowed to the piezo's safe operating window.

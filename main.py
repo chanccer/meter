@@ -6,16 +6,16 @@ Piezo 电压-位移查找表（LUT）自动采集系统 / PID·ADRC 闭环定位
 
 使用示例
 --------
-  python main.py                                          # 正常 LUT 采集
-  python main.py --dry-run                                # 模拟运行（无需硬件）
-  python main.py --load lut_xxx.csv                       # 查询模式
-  python main.py --pid 1000                               # PID 定位到 1000 nm
-  python main.py --pid 1000 --load lut_xxx.csv            # PID + LUT 前馈
-  python main.py --pid 1000 --autotune                    # 先自动整定再 PID 定位
-  python main.py --pid 1000 --controller adrc             # ADRC 定位（需先辨识模型）
-  python main.py --pid 1000 --controller adrc --no-smith  # ADRC 不含 Smith Predictor
-  python main.py --acquire --pid 1000                     # 采集 LUT 后立即 PID 定位（前馈自动启用）
-  python main.py --acquire --pid 1000 --controller adrc   # 采集 LUT 后立即 ADRC 定位
+  python main.py                                           # 正常 LUT 采集
+  python main.py --dry-run                                 # 模拟运行（无需硬件）
+  python main.py --load lut_xxx.csv                        # 查询模式
+  python main.py --goto 1000                               # 定位到 1000 nm（默认 PID）
+  python main.py --goto 1000 --load lut_xxx.csv            # 定位 + LUT 前馈
+  python main.py --goto 1000 --autotune                    # 先自动整定再定位
+  python main.py --goto 1000 --controller adrc             # ADRC 定位（含模型辨识）
+  python main.py --goto 1000 --controller adrc --no-smith  # ADRC 不含 Smith Predictor
+  python main.py --acquire --goto 1000                     # 采集 LUT 后立即定位（前馈自动启用）
+  python main.py --acquire --goto 1000 --controller adrc   # 采集 LUT 后立即 ADRC 定位
   python main.py --trajectory sine --traj-amp 500 --traj-offset 1000 --traj-freq 0.5 --traj-cycles 3  # 正弦轨迹
   python main.py --trajectory triangle --traj-amp 800 --traj-offset 1000 --traj-freq 0.2 --traj-duration 20
 """
@@ -73,7 +73,7 @@ def _query_mode(csv_path: str) -> None:
                 print(f"  [{direction}] 查询失败: {e}")
 
 
-def _pid_mode(
+def _goto_mode(
     target_nm: float,
     temperature_C: float,
     lut_path: Optional[str],
@@ -272,13 +272,13 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="不连接硬件，用随机数模拟")
     parser.add_argument("--load", metavar="CSV",
-                        help="加载已有 LUT CSV；单独使用时进入查询模式，与 --pid 合用时作为前馈")
-    parser.add_argument("--pid", metavar="NM", type=float,
+                        help="加载已有 LUT CSV；单独使用时进入查询模式，与 --goto 合用时作为前馈")
+    parser.add_argument("--goto", metavar="NM", type=float,
                         help="闭环定位：驱动 Piezo 到达目标位移（nm）")
-    parser.add_argument("--pid-temp", metavar="TEMP", type=float, default=25.0,
-                        help="PID/ADRC 模式的温度 °C（默认 25）")
+    parser.add_argument("--temp", metavar="C", type=float, default=25.0,
+                        help="控制模式的工作温度 °C（默认 25）")
     parser.add_argument("--autotune", action="store_true",
-                        help="在定位前执行阶跃响应自动整定（需配合 --pid 使用）")
+                        help="在定位前执行阶跃响应自动整定（需配合 --goto 使用）")
     parser.add_argument("--controller", choices=["pid", "adrc"], default="pid",
                         help="控制器类型：pid（默认）或 adrc（含 ESO + Smith Predictor）")
     parser.add_argument("--smith", dest="smith", action="store_true", default=True,
@@ -286,7 +286,7 @@ def main() -> None:
     parser.add_argument("--no-smith", dest="smith", action="store_false",
                         help="ADRC 禁用 Smith Predictor")
     parser.add_argument("--acquire", action="store_true",
-                        help="先采集 LUT，再立即执行闭环定位（需配合 --pid 使用）")
+                        help="先采集 LUT，再立即执行闭环定位（需配合 --goto 使用）")
     parser.add_argument("--temperatures", metavar="C", type=float, nargs="+", default=None,
                         help=f"采集温度点列表 °C（默认 {TEMPERATURES}）；多个值空格分隔")
     parser.add_argument("--v-start", metavar="V", type=float, default=None,
@@ -352,7 +352,7 @@ def main() -> None:
             amp_nm=amp_nm,
             offset_nm=offset,
             duration_s=duration_s,
-            temperature_C=args.pid_temp,
+            temperature_C=args.temp,
             lut_path=args.load,
             cfg=cfg,
             controller=args.controller,
@@ -361,8 +361,8 @@ def main() -> None:
         return
 
     if args.acquire:
-        if args.pid is None:
-            parser.error("--acquire 需要同时指定 --pid <目标位移 nm>")
+        if args.goto is None:
+            parser.error("--acquire 需要同时指定 --goto <目标位移 nm>")
         print("[采集] 开始 LUT 采集，完成后自动切换到闭环定位...")
         lut_path = run_acquisition(cfg)
         if lut_path is None:
@@ -370,9 +370,9 @@ def main() -> None:
             sys.exit(1)
         print(f"\n[采集完成] LUT 已保存: {lut_path}")
         print("[定位] 切换到闭环定位模式...\n")
-        _pid_mode(
-            target_nm=args.pid,
-            temperature_C=args.pid_temp,
+        _goto_mode(
+            target_nm=args.goto,
+            temperature_C=args.temp,
             lut_path=lut_path,
             cfg=cfg,
             controller=args.controller,
@@ -380,10 +380,10 @@ def main() -> None:
         )
         return
 
-    if args.pid is not None:
-        _pid_mode(
-            target_nm=args.pid,
-            temperature_C=args.pid_temp,
+    if args.goto is not None:
+        _goto_mode(
+            target_nm=args.goto,
+            temperature_C=args.temp,
             lut_path=args.load,
             cfg=cfg,
             controller=args.controller,

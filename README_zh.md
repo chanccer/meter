@@ -69,20 +69,20 @@ uv run python main.py --load lut_output/lut_20250506_143022.csv
 
 跳过采集，直接加载 CSV 文件，演示正向/反向插值查询。
 
-### PID 闭环定位
+### 闭环定位
 
 ```bash
 # 定位到 1000 nm（无前馈，从 V_START 出发，纯 PI 控制）
-uv run python main.py --pid 1000
+uv run python main.py --goto 1000
 
 # 推荐：搭配 LUT 前馈，收敛更快、精度更高
-uv run python main.py --pid 1000 --load lut_output/lut_20250506_143022.csv
+uv run python main.py --goto 1000 --load lut_output/lut_20250506_143022.csv
 
 # 指定温度（用于 LUT 前馈查询，默认 25°C）
-uv run python main.py --pid 1000 --load lut_xxx.csv --pid-temp 30
+uv run python main.py --goto 1000 --load lut_xxx.csv --temp 30
 
 # 模拟模式（无需硬件）
-uv run python main.py --pid 1000 --load lut_xxx.csv --dry-run
+uv run python main.py --goto 1000 --load lut_xxx.csv --dry-run
 ```
 
 ### ADRC 闭环定位
@@ -91,16 +91,16 @@ ADRC（自抗扰控制）通过扩张状态观测器（ESO）实时估计并抵�
 
 ```bash
 # ADRC + Smith Predictor（默认，θ_piezo 较大时推荐）
-uv run python main.py --pid 1000 --controller adrc
+uv run python main.py --goto 1000 --controller adrc
 
 # ADRC 不含 Smith Predictor
-uv run python main.py --pid 1000 --controller adrc --no-smith
+uv run python main.py --goto 1000 --controller adrc --no-smith
 
 # ADRC + LUT 前馈
-uv run python main.py --pid 1000 --controller adrc --load lut_output/lut_xxx.csv
+uv run python main.py --goto 1000 --controller adrc --load lut_output/lut_xxx.csv
 
 # 模拟 ADRC（无需硬件）
-uv run python main.py --pid 1000 --controller adrc --dry-run
+uv run python main.py --goto 1000 --controller adrc --dry-run
 ```
 
 ADRC 模式在控制循环前自动执行 `identify_model()`（阶跃响应辨识），获取 K、τ、θ 植物参数。辨识失败时自动回退到 PID 模式。
@@ -109,13 +109,13 @@ ADRC 模式在控制循环前自动执行 `identify_model()`（阶跃响应辨�
 
 ```bash
 # 自动整定后定位到 1000 nm
-uv run python main.py --pid 1000 --autotune
+uv run python main.py --goto 1000 --autotune
 
 # 自动整定 + LUT 前馈（最高精度）
-uv run python main.py --pid 1000 --autotune --load lut_output/lut_20250506_143022.csv
+uv run python main.py --goto 1000 --autotune --load lut_output/lut_20250506_143022.csv
 
 # 模拟自动整定（无需硬件）
-uv run python main.py --pid 1000 --autotune --dry-run
+uv run python main.py --goto 1000 --autotune --dry-run
 ```
 
 `--autotune` 在 PID 定位前先执行阶跃响应辨识测试，自动计算 `Kp` 和 `Ki`，无需手动调参。整定增益仅对本次会话有效；如需永久保存，将打印的数值写入 `main.py` 顶部配置即可。
@@ -127,17 +127,17 @@ uv run python main.py --pid 1000 --autotune --dry-run
 单条命令完成 LUT 采集与闭环定位全流程。LUT 路径自动传入，无需手动指定 `--load`。
 
 ```bash
-# 采集 LUT，然后 PID 定位到 1000 nm（前馈自动启用）
-uv run python main.py --acquire --pid 1000
+# 采集 LUT，然后定位到 1000 nm（前馈自动启用，默认 PID）
+uv run python main.py --acquire --goto 1000
 
 # 采集 LUT，然后 ADRC 定位到 1000 nm
-uv run python main.py --acquire --pid 1000 --controller adrc
+uv run python main.py --acquire --goto 1000 --controller adrc
 
 # 完整流程模拟（无需硬件）
-uv run python main.py --acquire --pid 1000 --dry-run
+uv run python main.py --acquire --goto 1000 --dry-run
 ```
 
-`--acquire` 需要同时指定 `--pid`。采集完成后，新保存的 LUT 自动作为前馈初始电压加载，无需手动 `--load`。
+`--acquire` 需要同时指定 `--goto`。采集完成后，新保存的 LUT 自动作为前馈初始电压加载，无需手动 `--load`。
 
 ### 轨迹跟踪（`--trajectory`）
 
@@ -282,8 +282,8 @@ uv run python main.py --v-step 0.05
 # 同时指定范围和步长
 uv run python main.py --v-start 0.2 --v-end 4.5 --v-step 0.05
 
-# 电压限制同样约束 PID/ADRC 定位时的控制器输出
-uv run python main.py --pid 1000 --v-start 0.2 --v-end 4.5
+# 电压限制同样约束定位时的控制器输出
+uv run python main.py --goto 1000 --v-start 0.2 --v-end 4.5
 ```
 
 `V_STEP` 是用户选择的 LUT 网格密度，与 Moku 的 DAC 硬件精度无关。Moku:Go 波形发生器为 16-bit，在 ±5V 范围内精度约 0.15 mV，远高于典型步长设定。`V_START`/`V_END` 默认 0~5V 对应 Moku 单端输出范围，实际使用时应根据压电执行器的安全工作范围缩小。
