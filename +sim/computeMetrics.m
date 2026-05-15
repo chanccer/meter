@@ -1,6 +1,8 @@
-function [lines, statusMsg] = computeMetrics(t, errArr, spArr, yTrue)
-%COMPUTEMETRICS  Standard step-response performance metrics.
-%   Returns a cell array of display strings and a short status message.
+function [lines, statusMsg, dynMetrics] = computeMetrics(t, errArr, spArr, yTrue)
+%COMPUTEMETRICS  Step-response metrics + dynamic tracking metrics.
+%   dynMetrics.normRMS     – SS RMS as % of setpoint RMS variation
+%   dynMetrics.phaseLag_ms – output lag behind setpoint (ms, xcorr)
+%   dynMetrics.ampRatio    – peak-to-peak output / setpoint in SS tail (%)
 
     dt = t(2) - t(1);
     n  = numel(errArr);
@@ -67,6 +69,75 @@ function [lines, statusMsg] = computeMetrics(t, errArr, spArr, yTrue)
     IAE  = trapz(t, abs(errArr));
     ITAE = trapz(t, t .* abs(errArr));
 
+    % ── Dynamic tracking metrics (steady-state tail) ────────────────
+    sp_tail   = spArr(tail);
+    y_tail    = yTrue(tail);
+    yM_tail   = errArr(tail) + y_tail;   % reconstruct yMeas in tail
+
+    % 1. Normalized RMS: SS_RMS as % of setpoint RMS variation
+    sp_var = rms(sp_tail - mean(sp_tail));
+    if sp_var > 1
+        normRMS = ssRMS / sp_var * 100;
+    else
+        normRMS = NaN;
+    end
+
+    % 2. Phase lag via cross-correlation (positive = output lags setpoint)
+    sp_z = sp_tail - mean(sp_tail);
+    y_z  = y_tail  - mean(y_tail);
+    if rms(sp_z) > 1 && rms(y_z) > 1
+        maxLag = min(round(numel(tail)/2), round(2/dt));
+        [r, lags] = xcorr(y_z, sp_z, maxLag);
+        [~, mi]   = max(r);
+        phaseLag_ms = lags(mi) * dt * 1000;
+    else
+        phaseLag_ms = NaN;
+    end
+
+    % 3. Amplitude ratio: P2P output / P2P setpoint in SS tail (%)
+    pp_sp = max(sp_tail) - min(sp_tail);
+    pp_y  = max(y_tail)  - min(y_tail);
+    if pp_sp > 1
+        ampRatio = pp_y / pp_sp * 100;
+    else
+        ampRatio = NaN;
+    end
+
+    % 4. Mean minimum approach: for each measured point, distance to the
+    %    nearest value anywhere on the full setpoint trajectory.
+    %    Captures "how close did the output ever get to each target value"
+    %    independently of timing — robust to pure phase lag.
+    stride   = max(1, round(numel(spArr)/500));  % downsample sp for speed
+    sp_ds    = spArr(1:stride:end);
+    nT       = numel(yM_tail);
+    minD     = zeros(nT, 1);
+    for ii = 1:nT
+        minD(ii) = min(abs(yM_tail(ii) - sp_ds));
+    end
+    minApproach_nm = mean(minD);
+
+    dynMetrics.normRMS        = normRMS;
+    dynMetrics.phaseLag_ms    = phaseLag_ms;
+    dynMetrics.ampRatio       = ampRatio;
+    dynMetrics.minApproach_nm = minApproach_nm;
+
+    % Format dynamic metrics lines
+    if ~isnan(normRMS)
+        normStr = sprintf('%.1f%%', normRMS);
+    else
+        normStr = 'N/A (static SP)';
+    end
+    if ~isnan(phaseLag_ms)
+        lagStr = sprintf('%.0f ms', phaseLag_ms);
+    else
+        lagStr = 'N/A';
+    end
+    if ~isnan(ampRatio)
+        ampStr = sprintf('%.1f%%', ampRatio);
+    else
+        ampStr = 'N/A (static SP)';
+    end
+
     lines = { ...
         '── Step Response ──────────────────────────────────────────'; ...
         sprintf('  Overshoot           : %s',     overStr); ...
@@ -77,6 +148,12 @@ function [lines, statusMsg] = computeMetrics(t, errArr, spArr, yTrue)
         '── Integral Criteria ──────────────────────────────────────'; ...
         sprintf('  IAE   (∫|e|dt)      : %.1f nm·s',  IAE); ...
         sprintf('  ITAE  (∫t|e|dt)     : %.1f nm·s²', ITAE); ...
+        ''; ...
+        '── Dynamic Tracking (SS tail) ─────────────────────────────'; ...
+        sprintf('  Norm RMS            : %s  (SS err / SP swing)', normStr); ...
+        sprintf('  Phase lag           : %s',     lagStr); ...
+        sprintf('  Amplitude ratio     : %s  (output / SP peak-to-peak)', ampStr); ...
+        sprintf('  Min approach        : %.1f nm  (mean nearest SP value)', minApproach_nm); ...
     };
 
     if ssRMS < 0.05 * max(abs(spArr(end)), 1)

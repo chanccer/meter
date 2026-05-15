@@ -21,6 +21,11 @@ function saveConfig(configPath, p)
         cfg.v_max         = p.v_max;
         cfg.t_total       = p.t_total;
         cfg.dt_pid_us     = p.dt_pid_us;
+        cfg.bw_enable     = p.bw_enable;
+        cfg.bw_A          = p.bw_A;
+        cfg.bw_beta       = p.bw_beta;
+        cfg.bw_gamma      = p.bw_gamma;
+        cfg.bw_D          = p.bw_D;
         cfg.setpoints     = cellToJson(p.setpoints);
         cfg.signals       = cellToJson(p.signals);
         fid = fopen(configPath, 'w', 'n', 'UTF-8');

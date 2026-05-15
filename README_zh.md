@@ -1,6 +1,6 @@
 # meter — Piezo 电压-位移 LUT 自动采集系统
 
-自动建立 Piezo 执行器的电压-位移查找表（LUT），并提供**闭环 PID 定位模式**，驱动 Piezo 到达指定位移。通过 **µMD2**（USB 串口位移传感器）采集纳米级位移数据，通过 **Moku:Go** 输出 DC 驱动电压，支持多温度点、迟滞测量和双向插值查询。
+自动建立 Piezo 执行器的电压-位移查找表（LUT），并提供 **PID 和 ADRC（自抗扰控制）闭环定位模式**，以纳米级精度驱动 Piezo 到达指定位移。通过 **µMD2**（USB 串口位移传感器）采集位移数据，通过 **Moku:Go** 输出 DC 驱动电压，支持多温度点、迟滞测量和双向插值查询。
 
 ---
 
@@ -18,7 +18,7 @@
 需要 Python 3.14+ 和 [uv](https://docs.astral.sh/uv/)。支持 **Windows、macOS、Linux**。
 
 ```bash
-git clone <repo>
+git clone https://github.com/chanccer/meter.git
 cd meter
 uv sync
 ```
@@ -85,6 +85,26 @@ uv run python main.py --pid 1000 --load lut_xxx.csv --pid-temp 30
 uv run python main.py --pid 1000 --load lut_xxx.csv --dry-run
 ```
 
+### ADRC 闭环定位
+
+ADRC（自抗扰控制）通过扩张状态观测器（ESO）实时估计并抵消包括迟滞和模型失配在内的总扰动，定位前自动执行植物模型辨识。
+
+```bash
+# ADRC + Smith Predictor（默认，θ_piezo 较大时推荐）
+uv run python main.py --pid 1000 --controller adrc
+
+# ADRC 不含 Smith Predictor
+uv run python main.py --pid 1000 --controller adrc --no-smith
+
+# ADRC + LUT 前馈
+uv run python main.py --pid 1000 --controller adrc --load lut_output/lut_xxx.csv
+
+# 模拟 ADRC（无需硬件）
+uv run python main.py --pid 1000 --controller adrc --dry-run
+```
+
+ADRC 模式在控制循环前自动执行 `identify_model()`（阶跃响应辨识），获取 K、τ、θ 植物参数。辨识失败时自动回退到 PID 模式。
+
 ### PID 自动整定（首次使用推荐）
 
 ```bash
@@ -102,11 +122,80 @@ uv run python main.py --pid 1000 --autotune --dry-run
 
 控制器每次迭代实时打印当前电压、位移和误差。当误差连续 `PID_CONVERGE_COUNT` 次满足 `PID_TOLERANCE_NM` 时宣告收敛，程序保持当前电压直到 `Ctrl+C`。退出时电压自动归零。
 
+### 先采集 LUT 再立即定位（`--acquire`）
+
+单条命令完成 LUT 采集与闭环定位全流程。LUT 路径自动传入，无需手动指定 `--load`。
+
+```bash
+# 采集 LUT，然后 PID 定位到 1000 nm（前馈自动启用）
+uv run python main.py --acquire --pid 1000
+
+# 采集 LUT，然后 ADRC 定位到 1000 nm
+uv run python main.py --acquire --pid 1000 --controller adrc
+
+# 完整流程模拟（无需硬件）
+uv run python main.py --acquire --pid 1000 --dry-run
+```
+
+`--acquire` 需要同时指定 `--pid`。采集完成后，新保存的 LUT 自动作为前馈初始电压加载，无需手动 `--load`。
+
+### 轨迹跟踪（`--trajectory`）
+
+让 Piezo 持续跟踪任意波形。ADRC 控制律内置设定值导数前馈（`sp_dot = Δr/Δt`），自动提供速度前馈，无需额外编写逆模型代码。
+
+```bash
+# 正弦波：以 1000nm 为中心 ±500nm，0.5Hz，3 个周期（推荐 ADRC）
+uv run python main.py --trajectory sine --traj-amp 500 --traj-offset 1000 \
+    --traj-freq 0.5 --traj-cycles 3 --controller adrc
+
+# 三角波：±800nm，0.2Hz，20 秒
+uv run python main.py --trajectory triangle --traj-amp 800 --traj-offset 1000 \
+    --traj-freq 0.2 --traj-duration 20 --controller adrc
+
+# 搭配 LUT 前馈（改善初始暂态）
+uv run python main.py --trajectory sine --traj-amp 500 --traj-offset 1000 \
+    --traj-freq 0.5 --traj-cycles 5 --controller adrc \
+    --load lut_output/lut_xxx.csv
+
+# 模拟运行（无需硬件）
+uv run python main.py --trajectory sine --traj-amp 500 --traj-offset 1000 \
+    --traj-freq 0.5 --traj-cycles 3 --controller adrc --dry-run
+```
+
+支持波形：`sine`、`triangle`、`sawtooth`、`square`。结果保存至 `lut_output/trajectory_<时间戳>.csv`，列为 `time_s`、`setpoint_nm`、`measured_nm`、`voltage_V`。
+
+当 `freq_hz > 1/(2πτ) ≈ 2 Hz` 时会打印带宽警告——超出此频率后一阶系统开始衰减输出幅度，补偿所需电压幅度迅速增大。
+
+---
+
+## Python 模块结构
+
+Python 代码按职责拆分为独立模块，依赖关系单向：
+
+```
+meter/
+├── main.py          — CLI 入口（约 120 行）
+├── config.py        — Config dataclass + 所有常量
+├── models.py        — 纯数据类（ModelParams、PIDResult 等）
+├── utils.py         — 日志、统计、进度显示
+├── hardware.py      — UMD2Reader、MokuController（含 DryRun 变体）
+├── data.py          — PiezoLUT、CSVWriter
+├── acquisition.py   — run_sweep()、run_acquisition()
+├── control/
+│   ├── pid.py       — PIDController
+│   ├── adrc.py      — ADRCController、SmithPredictor（ZOH 精确 ESO）
+│   ├── hysteresis.py — BoucWen、SimpleHysteresis
+│   └── loop.py      — run_pid_control()、run_adrc_control()、run_control()
+└── tune/
+    ├── system_id.py — AutoTuner、identify_model()、measure_protocol_delay()
+    └── imc.py       — imc_tune_from_model()（Rivera 1986 IMC 公式）
+```
+
 ---
 
 ## 配置参数
 
-所有参数集中在 `main.py` 顶部，修改后直接运行即可。
+所有参数集中在 `config.py` 中，通过 `Config` dataclass 管理。
 
 ```python
 UMD2_PORT           = "AUTO"       # 自动检测，或指定 'COM7' / '/dev/ttyUSB0'
@@ -154,6 +243,13 @@ STEP_IDENT_V_HIGH   = 2.5          # 辨识阶跃终止电压 V
 STEP_IDENT_COLLECT_S = 3.0         # 每次阶跃响应采集时长 s
 STEP_IDENT_REPS     = 3            # 重复辨识次数（结果取均值）
 PROTO_DELAY_REPS    = 10           # 协议延迟测量重复次数
+
+# ADRC（--controller adrc）
+ADRC_WC             = 20.0         # 控制器带宽 ω_c rad/s（有模型辨识时由 IMC 自动设定）
+ADRC_W0             = 100.0        # ESO 带宽 ω₀ rad/s（自动设为 5·ω_c）
+ADRC_K              = 410.0        # 植物增益备用值 nm/V（辨识失败时使用）
+ADRC_TAU_MS         = 80.0         # 植物时间常数备用值 ms
+ADRC_SMITH          = True         # 默认启用 Smith Predictor
 ```
 
 **多温度扫描示例：**
@@ -163,6 +259,34 @@ TEMPERATURES = [20, 25, 30, 35, 40]
 ```
 
 每个温度点开始前会暂停并提示操作者调温，然后倒计时等待 `TEMP_STABILIZE_TIME` 秒稳定。仅单温度时（默认）跳过提示，直接测量。
+
+**温度点和电压范围均可在运行时通过命令行覆盖，无需修改 `config.py`：**
+
+```bash
+# 单温度（默认行为）
+uv run python main.py --temperatures 25
+
+# 多温度点扫描
+uv run python main.py --temperatures 20 25 30 35 40
+```
+
+**电压范围和步长同样可覆盖：**
+
+```bash
+# 只扫描 0~3V（如压电安全工作范围）
+uv run python main.py --v-end 3.0
+
+# 更细的 LUT 网格：步长 0.05V
+uv run python main.py --v-step 0.05
+
+# 同时指定范围和步长
+uv run python main.py --v-start 0.2 --v-end 4.5 --v-step 0.05
+
+# 电压限制同样约束 PID/ADRC 定位时的控制器输出
+uv run python main.py --pid 1000 --v-start 0.2 --v-end 4.5
+```
+
+`V_STEP` 是用户选择的 LUT 网格密度，与 Moku 的 DAC 硬件精度无关。Moku:Go 波形发生器为 16-bit，在 ±5V 范围内精度约 0.15 mV，远高于典型步长设定。`V_START`/`V_END` 默认 0~5V 对应 Moku 单端输出范围，实际使用时应根据压电执行器的安全工作范围缩小。
 
 ---
 
@@ -189,6 +313,8 @@ set_voltage(V) → sleep(SETTLE_TIME) → 清空积压帧 → 采集 N_SAMPLES �
 ### 采样与平均
 
 每个电压步进点采集 **`N_SAMPLES` 帧原始位移数据**（默认 100 帧）。µMD2 的输出频率为 **1000 samples/s**，因此 100 帧对应约 0.1 秒的稳态信号窗口。在每次采样开始前，脚本先等待 `SETTLE_TIME`（默认 0.5 s）让 Piezo 达到机械平衡，然后清空串口缓冲队列，确保统计仅使用稳态数据，不包含电压切换瞬间的过渡帧。
+
+> **注意——稳态判断为纯时间等待。** 当前实现假设 `SETTLE_TIME = 0.5 s` 足以使 Piezo 达到稳态，不主动检测位移方差是否收敛、信号是否停止漂移。对大多数压电器件而言这已足够——时间常数 τ ≈ 80 ms，5τ ≈ 400 ms，0.5 s 等待结束时动态响应基本完成。但若压电器件存在明显**蠕变**（铁电畴缓慢弛豫，施压后位移可持续漂移数秒乃至数分钟），采样窗口内信号可能仍未稳定，导致 LUT 出现异常高的迟滞或重复性差。若遇此情况，建议适当增大 `SETTLE_TIME`。
 
 ### 离群值剔除——3-σ 滤波
 
@@ -301,7 +427,7 @@ Piezo 执行器存在**机械迟滞**：在同一电压下，从低压方向接�
 采集完成后，脚本末尾自动演示查询。也可以在自己的代码中直接使用：
 
 ```python
-from main import PiezoLUT
+from data import PiezoLUT
 
 # 加载 LUT
 lut = PiezoLUT.from_csv("lut_output/lut_20250506_143022.csv")
@@ -533,7 +659,10 @@ LUT 前馈电压: 2.4380 V
 ### 在代码中直接调用
 
 ```python
-from main import Config, PiezoLUT, UMD2Reader, MokuController, run_pid_control
+from config import Config
+from data import PiezoLUT
+from hardware import UMD2Reader, MokuController
+from control.loop import run_control   # 统一入口，按 mode 分发到 PID 或 ADRC
 import logging
 
 cfg = Config()
@@ -545,7 +674,9 @@ moku = MokuController(cfg, logger)
 umd2.connect()
 moku.connect()
 
-result = run_pid_control(
+# PID 模式（默认）
+result = run_control(
+    mode="pid",          # 或 "adrc"
     target_nm=1000.0,
     cfg=cfg,
     umd2=umd2,
@@ -722,7 +853,10 @@ table(results)
 
 $$G(s) = \frac{K\,e^{-\theta s}}{\tau s + 1}$$
 
-纯滞后和反馈延迟均通过循环缓冲区实现。**迟滞**模型：电压升高时位移无偏移，电压降低时位移向下偏移 Hysteresis (nm)，模拟方向性机械迟滞。
+纯滞后和反馈延迟均通过循环缓冲区实现。**迟滞**模型支持两种方式：
+- **简单方向偏移**（默认）：电压下降时位移偏移 −Hysteresis (nm)，上升时无偏移。
+- **Bouc-Wen 模型**（`bw_enable = true`）：物理基础的非线性迟滞 ODE，  
+  $\Delta z = A\Delta u - \beta|\Delta u|z - \gamma\Delta u|z|$，输出 $= -D \cdot z$。可准确再现速率相关迟滞回线。参数：A（前屈服斜率）、β、γ（形状）、D_nm（最大迟滞位移贡献）。
 
 #### PID 控制器（微分项作用于测量值）
 
@@ -842,10 +976,10 @@ JSON 文件可读性良好，可手动编辑或纳入版本控制：
 加载 `lut_*.csv` 时：
 
 - 若同名 `model_*.csv` 存在且包含延迟分解字段，GUI 自动填入：
-  - **θ_piezo (ms)** ← `theta_piezo_ms`（Piezo 机械延迟）
+  - **θ_piezo (µs)** ← `theta_piezo_ms × 1000`（Piezo 机械延迟）
   - **θ_protocol (µs)** ← `theta_protocol_ms × 1000`（Moku 命令 + 串口帧 + USB 延迟）
 - 若同名 `summary_*.csv` 存在，GUI 自动读取 `hysteresis_max_nm`（各温度均值）并填入 **Hysteresis (nm)** 字段
-- 若模型文件为旧格式（无延迟分解列），则将 `theta_ms` 整体填入 θ_piezo 作为保守回退值
+- 若模型文件为旧格式（无延迟分解列），则将 `theta_ms × 1000`（转换为 µs）填入 θ_piezo 作为保守回退值
 
 ### 自动整定公式
 

@@ -7,7 +7,8 @@ function p = loadConfig(configPath)
         cfg = jsondecode(fileread(configPath));
         scalarFields = {'K','tau_ms','theta_us','v_dead','hysteresis_nm', ...
                         'kp','ki','kd','d_filter_n','adrc_wc','adrc_w0', ...
-                        'smith_adrc','delay_us','sp_dc','noise','v_max','t_total','dt_pid_us'};
+                        'smith_adrc','delay_us','sp_dc','noise','v_max','t_total','dt_pid_us', ...
+                        'bw_enable','bw_A','bw_beta','bw_gamma','bw_D'};
         for i = 1:numel(scalarFields)
             f = scalarFields{i};
             if isfield(cfg, f)

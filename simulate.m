@@ -41,7 +41,7 @@ mainGL.ColumnSpacing = 6;
 
 % ------------------------------------------------------------------ LEFT panel
 leftPanel = uipanel(mainGL, 'Title','Parameters');
-NROWS = 30;
+NROWS = 36;
 rh = repmat({22}, 1, NROWS);
 rh{22} = 120;   % setpoint table
 rh{23} = 24;    % setpoint add/remove buttons
@@ -58,7 +58,7 @@ innerGL.ColumnSpacing = 4;
 % ------------------------------------------------------------------ RIGHT panel
 rightPanel = uipanel(mainGL);
 rightGL = uigridlayout(rightPanel, [5 2]);
-rightGL.RowHeight    = {'1x','1x',38,72,130};
+rightGL.RowHeight    = {'1x','1x',38,24,72,130};
 rightGL.ColumnWidth  = {'1x','1x'};
 rightGL.Padding      = [4 4 4 4];
 rightGL.RowSpacing   = 6;
@@ -103,19 +103,36 @@ uibutton(btnGL,'Text','Save Config', ...
 cbDistErr = uicheckbox(btnGL, 'Text', 'Dist on Error', 'Value', false, ...
     'FontSize', 9, 'ValueChangedFcn', @(~,~) onDistErrToggle());    %#ok<NASGU>
 
-% Row 4: performance metrics panel
+% Row 4: dynamic tracking overlay checkboxes
+trackGL = uigridlayout(rightGL, [1 5]);
+trackGL.Layout.Row = 4;  trackGL.Layout.Column = [1 2];
+trackGL.ColumnWidth  = {120, 110, 100, 105, '1x'};
+trackGL.Padding      = [6 2 6 2];
+trackGL.ColumnSpacing = 10;
+uilabel(trackGL, 'Text', 'Error overlay:', 'FontSize', 9, ...
+    'HorizontalAlignment', 'right', 'FontColor', [0.35 0.35 0.35]);
+cbNormRMS  = uicheckbox(trackGL, 'Text', 'Norm RMS %',  'Value', false, ...
+    'FontSize', 9, 'ValueChangedFcn', @(~,~) onTrackOverlay());
+cbPhaseLag = uicheckbox(trackGL, 'Text', 'Phase lag',   'Value', false, ...
+    'FontSize', 9, 'ValueChangedFcn', @(~,~) onTrackOverlay());
+cbAmpRatio = uicheckbox(trackGL, 'Text', 'Amp ratio',   'Value', false, ...
+    'FontSize', 9, 'ValueChangedFcn', @(~,~) onTrackOverlay());
+cbMinApp   = uicheckbox(trackGL, 'Text', 'Min approach','Value', false, ...
+    'FontSize', 9, 'ValueChangedFcn', @(~,~) onTrackOverlay());
+
+% Row 5: performance metrics panel
 metricsArea = uitextarea(rightGL, ...
     'Value', {'Run a simulation to see step-response metrics.'}, ...
     'Editable', false, 'FontSize', 9, 'FontColor', [0.15 0.15 0.15], ...
     'BackgroundColor', [0.97 0.97 0.97]);
-metricsArea.Layout.Row = 4;  metricsArea.Layout.Column = [1 2];
+metricsArea.Layout.Row = 5;  metricsArea.Layout.Column = [1 2];
 
-% Row 5: scrollable log — retains full message history
+% Row 6: scrollable log — retains full message history
 logArea = uitextarea(rightGL, ...
     'Value', {[datestr(now,'HH:MM:SS') '  Ready — press ▶ Run Simulation']}, ...
     'Editable', false, 'FontSize', 8.5, 'FontColor', [0.2 0.2 0.2], ...
     'BackgroundColor', [0.95 0.98 1.00]);
-logArea.Layout.Row = 5;  logArea.Layout.Column = [1 2];
+logArea.Layout.Row = 6;  logArea.Layout.Column = [1 2];
 
 % ================================================================== LEFT: fields
 R = 0;   % row counter (shared by nested helpers below)
@@ -229,6 +246,15 @@ sTot  = mkField('Duration (s)',        0.5, 3600, p.t_total);
 sVmax = mkField('V max (V)',           0,   1000, p.v_max);
 sDT   = mkField('Controller DT (µs)', 1000, 500000, p.dt_pid_us);
 
+% ── Rows 31-36: Bouc-Wen Hysteresis ────────────────────────────────────────
+sectionLabel('Bouc-Wen Hysteresis');
+bwItems = {'Off','On'};
+sBWen   = mkDropdown('Enable', bwItems, bwItems{1 + p.bw_enable});
+sBWA    = mkField('A  (pre-yield)',   0.01, 10,  p.bw_A);
+sBWbeta = mkField('β  (dissipat.)',   0,    5,   p.bw_beta);
+sBWgam  = mkField('γ  (restoring)',   0,    5,   p.bw_gamma);
+sBWD    = mkField('D  (nm)',          0,    500, p.bw_D);
+
 % Apply initial controller mode state (enable/disable relevant fields)
 % Inline the initial state — avoids calling a nested function before its
 % definition is encountered in the sequential parse (MATLAB restriction).
@@ -268,6 +294,11 @@ simData = [];
         p.v_max          = sVmax.Value;
         p.t_total        = sTot.Value;
         p.dt_pid_us      = sDT.Value;
+        p.bw_enable      = strcmp(sBWen.Value, 'On');
+        p.bw_A           = sBWA.Value;
+        p.bw_beta        = sBWbeta.Value;
+        p.bw_gamma       = sBWgam.Value;
+        p.bw_D           = sBWD.Value;
     end
 
     function onRun()
@@ -275,10 +306,11 @@ simData = [];
         appendLog(sprintf('Running %s simulation  (%.1f s)…', p.ctrl_mode, p.t_total));
         try
             [t, yMeas, yTrue, vArr, errArr, distArr, spArr] = sim.runSim(p);
+            [mStr, statusMsg, dynM] = sim.computeMetrics(t, errArr, spArr, yTrue);
             simData = struct('t',t,'yMeas',yMeas,'yTrue',yTrue,'vArr',vArr, ...
-                             'errArr',errArr,'distArr',distArr,'spArr',spArr);
+                             'errArr',errArr,'distArr',distArr,'spArr',spArr, ...
+                             'dynMetrics',dynM);
             drawPlots(t, yMeas, yTrue, vArr, errArr, distArr, spArr);
-            [mStr, statusMsg] = sim.computeMetrics(t, errArr, spArr, yTrue);
             metricsArea.Value = mStr;
             appendLog(statusMsg);
         catch ME
@@ -294,6 +326,12 @@ simData = [];
         if ~isempty(simData)
             drawPlots(simData.t, simData.yMeas, simData.yTrue, simData.vArr, ...
                       simData.errArr, simData.distArr, simData.spArr);
+        end
+    end
+
+    function onTrackOverlay()
+        if ~isempty(simData)
+            drawErrOverlays();
         end
     end
 
@@ -348,6 +386,11 @@ simData = [];
         sTot.Value       = p0.t_total;
         sVmax.Value      = p0.v_max;
         sDT.Value        = p0.dt_pid_us;
+        sBWen.Value      = bwItems{1 + p0.bw_enable};
+        sBWA.Value       = p0.bw_A;
+        sBWbeta.Value    = p0.bw_beta;
+        sBWgam.Value     = p0.bw_gamma;
+        sBWD.Value       = p0.bw_D;
         onCtrlModeChange(p0.ctrl_mode);
         appendLog('Parameters reset to defaults.');
     end
@@ -526,6 +569,7 @@ simData = [];
         grid(axErr,'on');  hold(axErr,'off');
         xlim(axErr, tLim);
         ylim(axErr, [-half, half]);
+        drawErrOverlays();
 
         cla(axVolt);  hold(axVolt,'on');
         plot(axVolt, t, vArr,'Color',[0.15 0.62 0.15],'LineWidth',1.2);
@@ -546,6 +590,81 @@ simData = [];
         else
             niceYLim(axDist, distArr, 1);
         end
+    end
+
+    function drawErrOverlays()
+        % Remove previous overlay objects and redraw based on checkbox state
+        delete(findobj(axErr, 'Tag','dynOverlay'));
+        if isempty(simData), return; end
+        m    = simData.dynMetrics;
+        eArr = simData.errArr;
+        n    = numel(eArr);
+        tail = round(0.9*n):n;
+        ssR  = sqrt(mean(eArr(tail).^2));
+
+        hold(axErr,'on');
+        yPos = 0.97;   % top-right stacking position (normalised axes units)
+
+        % ── Norm RMS: ±SS_RMS band + text ──────────────────────────
+        if cbNormRMS.Value
+            yline(axErr,  ssR,'--','Color',[0.85 0.28 0.15],'LineWidth',0.9, ...
+                  'HandleVisibility','off','Tag','dynOverlay');
+            yline(axErr, -ssR,'--','Color',[0.85 0.28 0.15],'LineWidth',0.9, ...
+                  'HandleVisibility','off','Tag','dynOverlay');
+            if ~isnan(m.normRMS)
+                lbl = sprintf('Norm RMS: %.1f%%', m.normRMS);
+            else
+                lbl = 'Norm RMS: N/A';
+            end
+            text(axErr, 0.98, yPos, lbl, 'Units','normalized', ...
+                 'FontSize',8,'FontWeight','bold','HorizontalAlignment','right', ...
+                 'Color',[0.85 0.28 0.15],'BackgroundColor',[0.97 0.97 0.97], ...
+                 'Margin',2,'Tag','dynOverlay');
+            yPos = yPos - 0.12;
+        end
+
+        % ── Phase lag: text annotation ──────────────────────────────
+        if cbPhaseLag.Value
+            if ~isnan(m.phaseLag_ms)
+                lbl = sprintf('Phase lag: %.0f ms', m.phaseLag_ms);
+            else
+                lbl = 'Phase lag: N/A';
+            end
+            text(axErr, 0.98, yPos, lbl, 'Units','normalized', ...
+                 'FontSize',8,'FontWeight','bold','HorizontalAlignment','right', ...
+                 'Color',[0.10 0.45 0.75],'BackgroundColor',[0.97 0.97 0.97], ...
+                 'Margin',2,'Tag','dynOverlay');
+            yPos = yPos - 0.12;
+        end
+
+        % ── Amplitude ratio: text annotation ────────────────────────
+        if cbAmpRatio.Value
+            if ~isnan(m.ampRatio)
+                lbl = sprintf('Amp ratio: %.1f%%', m.ampRatio);
+            else
+                lbl = 'Amp ratio: N/A';
+            end
+            text(axErr, 0.98, yPos, lbl, 'Units','normalized', ...
+                 'FontSize',8,'FontWeight','bold','HorizontalAlignment','right', ...
+                 'Color',[0.15 0.60 0.15],'BackgroundColor',[0.97 0.97 0.97], ...
+                 'Margin',2,'Tag','dynOverlay');
+            yPos = yPos - 0.12;
+        end
+
+        % ── Min approach: horizontal line + text ────────────────────
+        if cbMinApp.Value
+            yline(axErr,  m.minApproach_nm,':', 'Color',[0.55 0.25 0.65], ...
+                  'LineWidth',1.2,'HandleVisibility','off','Tag','dynOverlay');
+            yline(axErr, -m.minApproach_nm,':', 'Color',[0.55 0.25 0.65], ...
+                  'LineWidth',1.2,'HandleVisibility','off','Tag','dynOverlay');
+            lbl = sprintf('Min approach: %.1f nm', m.minApproach_nm);
+            text(axErr, 0.98, yPos, lbl, 'Units','normalized', ...
+                 'FontSize',8,'FontWeight','bold','HorizontalAlignment','right', ...
+                 'Color',[0.55 0.25 0.65],'BackgroundColor',[0.97 0.97 0.97], ...
+                 'Margin',2,'Tag','dynOverlay');
+        end
+
+        hold(axErr,'off');
     end
 
     function niceYLim(ax, data, minHalfSpan)

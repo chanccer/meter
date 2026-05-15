@@ -1,6 +1,6 @@
 # meter — Piezo Voltage-Displacement LUT Acquisition System
 
-Automatically builds a voltage-displacement lookup table (LUT) for Piezo actuators, and provides a **closed-loop PID positioning mode** that drives the Piezo to a target displacement. Displacement data is collected at nanometer resolution via a **µMD2** USB serial sensor; drive voltage is output by a **Moku:Go** waveform generator. Supports multi-temperature characterization, hysteresis measurement, and bidirectional interpolation queries.
+Automatically builds a voltage-displacement lookup table (LUT) for Piezo actuators, and provides **closed-loop positioning** via PID or ADRC (Active Disturbance Rejection Control), driving the Piezo to a target displacement with nanometer precision. Displacement data is collected via a **µMD2** USB serial sensor; drive voltage is output by a **Moku:Go** waveform generator. Supports multi-temperature characterization, hysteresis measurement, and bidirectional interpolation queries.
 
 ---
 
@@ -18,7 +18,7 @@ Automatically builds a voltage-displacement lookup table (LUT) for Piezo actuato
 Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/). Runs on **Windows, macOS, and Linux**.
 
 ```bash
-git clone <repo>
+git clone https://github.com/chanccer/meter.git
 cd meter
 uv sync
 ```
@@ -85,6 +85,26 @@ uv run python main.py --pid 1000 --load lut_xxx.csv --pid-temp 30
 uv run python main.py --pid 1000 --load lut_xxx.csv --dry-run
 ```
 
+### ADRC closed-loop positioning
+
+ADRC (Active Disturbance Rejection Control) uses an Extended State Observer (ESO) to estimate and cancel disturbances (including hysteresis and model mismatch) in real time. It automatically identifies the plant model before positioning.
+
+```bash
+# ADRC with Smith Predictor (default, recommended when θ_piezo is significant)
+uv run python main.py --pid 1000 --controller adrc
+
+# ADRC without Smith Predictor
+uv run python main.py --pid 1000 --controller adrc --no-smith
+
+# ADRC + LUT feedforward
+uv run python main.py --pid 1000 --controller adrc --load lut_output/lut_xxx.csv
+
+# Simulate ADRC without hardware
+uv run python main.py --pid 1000 --controller adrc --dry-run
+```
+
+ADRC mode automatically runs `identify_model()` (step-response identification) before the control loop to determine plant parameters K, τ, and θ. If identification fails, it falls back to PID mode.
+
 ### PID auto-tuning (recommended for first use)
 
 ```bash
@@ -102,11 +122,80 @@ uv run python main.py --pid 1000 --autotune --dry-run
 
 The controller outputs the current voltage, measured displacement, and positioning error on each iteration. When the error has stayed within `PID_TOLERANCE_NM` for `PID_CONVERGE_COUNT` consecutive iterations, the Piezo is locked at the target and the script holds until `Ctrl+C`. On exit, the voltage is zeroed automatically.
 
+### Acquire LUT then position immediately (`--acquire`)
+
+Run LUT acquisition and closed-loop positioning in a single command. The LUT path is passed automatically as feedforward — no `--load` needed.
+
+```bash
+# Acquire LUT, then PID-position to 1000 nm with feedforward
+uv run python main.py --acquire --pid 1000
+
+# Acquire LUT, then ADRC-position to 1000 nm
+uv run python main.py --acquire --pid 1000 --controller adrc
+
+# Full pipeline (dry-run simulation, no hardware)
+uv run python main.py --acquire --pid 1000 --dry-run
+```
+
+`--acquire` requires `--pid`. After acquisition completes the freshly saved LUT is loaded automatically as the feedforward starting point for the control loop.
+
+### Trajectory tracking (`--trajectory`)
+
+Drive the Piezo to continuously follow an arbitrary waveform. ADRC's built-in setpoint-derivative feedforward (`sp_dot = Δr/Δt`) automatically provides velocity feedforward — no explicit inverse-model code needed.
+
+```bash
+# Sine wave: ±500 nm around 1000 nm, 0.5 Hz, 3 cycles (ADRC recommended)
+uv run python main.py --trajectory sine --traj-amp 500 --traj-offset 1000 \
+    --traj-freq 0.5 --traj-cycles 3 --controller adrc
+
+# Triangle wave: ±800 nm, 0.2 Hz, 20 s
+uv run python main.py --trajectory triangle --traj-amp 800 --traj-offset 1000 \
+    --traj-freq 0.2 --traj-duration 20 --controller adrc
+
+# With LUT feedforward for better initial position (reduces transient)
+uv run python main.py --trajectory sine --traj-amp 500 --traj-offset 1000 \
+    --traj-freq 0.5 --traj-cycles 5 --controller adrc \
+    --load lut_output/lut_xxx.csv
+
+# Dry-run simulation (no hardware)
+uv run python main.py --trajectory sine --traj-amp 500 --traj-offset 1000 \
+    --traj-freq 0.5 --traj-cycles 3 --controller adrc --dry-run
+```
+
+Supported waveforms: `sine`, `triangle`, `sawtooth`, `square`. Results are saved to `lut_output/trajectory_<timestamp>.csv` with columns `time_s`, `setpoint_nm`, `measured_nm`, `voltage_V`.
+
+A bandwidth warning is printed when `freq_hz > 1/(2πτ) ≈ 2 Hz` — above this frequency the first-order plant attenuates the output amplitude and requires large voltage swings to compensate.
+
+---
+
+## Python Module Structure
+
+The Python codebase is split into focused modules with a single-direction dependency graph:
+
+```
+meter/
+├── main.py          — CLI entry point (~120 lines)
+├── config.py        — Config dataclass + all constants
+├── models.py        — Pure dataclasses (ModelParams, PIDResult, …)
+├── utils.py         — Logging, statistics, progress display
+├── hardware.py      — UMD2Reader, MokuController (+ DryRun variants)
+├── data.py          — PiezoLUT, CSVWriter
+├── acquisition.py   — run_sweep(), run_acquisition()
+├── control/
+│   ├── pid.py       — PIDController
+│   ├── adrc.py      — ADRCController, SmithPredictor (ZOH-exact ESO)
+│   ├── hysteresis.py — BoucWen, SimpleHysteresis
+│   └── loop.py      — run_pid_control(), run_adrc_control(), run_control()
+└── tune/
+    ├── system_id.py — AutoTuner, identify_model(), measure_protocol_delay()
+    └── imc.py       — imc_tune_from_model() (Rivera 1986 IMC formulas)
+```
+
 ---
 
 ## Configuration
 
-All parameters are defined at the top of `main.py`. Edit them directly before running.
+All parameters are defined in `config.py`. The `Config` dataclass holds hardware settings, PID/ADRC gains, and acquisition parameters.
 
 ```python
 UMD2_PORT           = "AUTO"       # Auto-detect, or specify 'COM7' / '/dev/ttyUSB0'
@@ -154,6 +243,13 @@ STEP_IDENT_V_HIGH   = 2.5          # Identification step end voltage (V)
 STEP_IDENT_COLLECT_S = 3.0         # Collection duration per repetition (s)
 STEP_IDENT_REPS     = 3            # Repetitions — results are averaged
 PROTO_DELAY_REPS    = 10           # Repetitions for protocol delay measurement
+
+# ADRC (--controller adrc)
+ADRC_WC             = 20.0         # Controller bandwidth ω_c (rad/s) — auto-set by IMC if model available
+ADRC_W0             = 100.0        # ESO bandwidth ω₀ (rad/s) — auto-set as 5·ω_c
+ADRC_K              = 410.0        # Plant gain fallback nm/V (used if identify_model() fails)
+ADRC_TAU_MS         = 80.0         # Plant time constant fallback (ms)
+ADRC_SMITH          = True         # Enable Smith Predictor by default
 ```
 
 **Multi-temperature example:**
@@ -161,6 +257,34 @@ PROTO_DELAY_REPS    = 10           # Repetitions for protocol delay measurement
 ```python
 TEMPERATURES = [20, 25, 30, 35, 40]
 ```
+
+**Temperature points and voltage range can be overridden at runtime without editing `config.py`:**
+
+```bash
+# Single temperature (default behavior)
+uv run python main.py --temperatures 25
+
+# Multi-temperature sweep
+uv run python main.py --temperatures 20 25 30 35 40
+```
+
+**Voltage range and step can also be overridden:**
+
+```bash
+# Sweep only 0–3 V (e.g., piezo safe working range)
+uv run python main.py --v-end 3.0
+
+# Finer LUT resolution: 0.05 V steps instead of 0.1 V
+uv run python main.py --v-step 0.05
+
+# Custom range and step together
+uv run python main.py --v-start 0.2 --v-end 4.5 --v-step 0.05
+
+# Voltage limits also clamp the controller output during PID/ADRC positioning
+uv run python main.py --pid 1000 --v-start 0.2 --v-end 4.5
+```
+
+`V_STEP` is a user-chosen LUT grid density, not the Moku DAC hardware resolution. The Moku:Go Waveform Generator is 16-bit over ±5 V (≈ 0.15 mV precision), so any step ≥ 1 mV is well within hardware capability. `V_START` and `V_END` default to 0–5 V to match the Moku single-ended output range, but should be narrowed to the piezo's safe operating window.
 
 The script pauses before each temperature point, prompts the operator to adjust the setpoint, then counts down `TEMP_STABILIZE_TIME` seconds before sweeping. With a single temperature (the default), the prompt and countdown are skipped.
 
@@ -189,6 +313,8 @@ An intermediate CSV is saved immediately after each temperature point completes 
 ### Sampling and averaging
 
 Each voltage step collects **`N_SAMPLES` raw displacement frames** from the µMD2 (default: 100 frames). The µMD2 outputs at **1000 samples/s**, so 100 frames span approximately 0.1 s of stationary signal. Before sampling begins, the script waits `SETTLE_TIME` (default: 0.5 s) to let the Piezo reach mechanical equilibrium, then flushes any queued frames so only steady-state data enters the statistics.
+
+> **Note — steady-state detection is time-based only.** The current implementation assumes `SETTLE_TIME = 0.5 s` is sufficient for the Piezo to reach steady state. This is a fixed wait with no active convergence check: the script does not monitor displacement variance or verify that the signal has stopped drifting before sampling begins. For most Piezos this is adequate — at τ ≈ 80 ms, five time constants (5τ ≈ 400 ms) elapse before the 0.5 s wait ends. However, Piezos with significant **creep** (slow ferroelectric domain relaxation, which can continue for seconds to minutes after voltage is applied) may produce readings that are still drifting within the sampling window. If the LUT shows unexpectedly high hysteresis or non-repeatability, consider increasing `SETTLE_TIME`.
 
 ### Outlier rejection — 3-σ filter
 
@@ -301,7 +427,7 @@ Saved automatically after each temperature point when `STEP_IDENT_ENABLED = True
 After acquisition the script prints a short query demonstration. You can also import and use `PiezoLUT` directly:
 
 ```python
-from main import PiezoLUT
+from data import PiezoLUT
 
 # Load a saved LUT
 lut = PiezoLUT.from_csv("lut_output/lut_20250506_143022.csv")
@@ -351,7 +477,7 @@ $$G(s) = \frac{K \, e^{-\theta s}}{\tau s + 1}$$
 | τ | s | Time constant — speed of the exponential approach to steady state (mechanical + electrical) |
 | θ | s | Total dead time — θ_piezo (mechanical lag) + θ_protocol (Moku command + serial frame + USB polling) |
 
-The script measures θ_protocol separately via `measure_protocol_delay()` (N repeated no-op Moku commands + frame arrival timing), then computes θ_piezo = θ_total − θ_protocol. Both are stored in the model CSV so you can set the MATLAB simulation's **θ plant DT** to θ_piezo and **Sensor delay** to θ_protocol for the most accurate closed-loop model.
+The script measures θ_protocol separately via `measure_protocol_delay()` (N repeated no-op Moku commands + frame arrival timing), then computes θ_piezo = θ_total − θ_protocol. Both are stored in the model CSV in milliseconds (`theta_piezo_ms`, `theta_protocol_ms`). To use them in the MATLAB simulation, multiply by 1000: set **θ_piezo (µs)** ← `theta_piezo_ms × 1000` and **θ_protocol (µs)** ← `theta_protocol_ms × 1000`. The **Load LUT** button does this automatically.
 
 The corresponding step response (voltage jumps by ΔV at t = 0) is:
 
@@ -532,10 +658,13 @@ LUT 前馈电压: 2.4380 V
 | `PID_INTEGRAL_LIMIT` | Anti-windup cap on I-term contribution. | `0.5` V |
 | `PID_TOLERANCE_NM` | Tighten for higher accuracy; loosen if sensor noise is large. | `5.0` nm |
 
-### Using PID from your own code
+### Using PID or ADRC from your own code
 
 ```python
-from main import Config, PiezoLUT, UMD2Reader, MokuController, run_pid_control
+from config import Config
+from data import PiezoLUT
+from hardware import UMD2Reader, MokuController
+from control.loop import run_control   # dispatches to PID or ADRC
 import logging
 
 cfg = Config()
@@ -547,7 +676,9 @@ moku = MokuController(cfg, logger)
 umd2.connect()
 moku.connect()
 
-result = run_pid_control(
+# PID mode (default)
+result = run_control(
+    mode="pid",          # or "adrc"
     target_nm=1000.0,
     cfg=cfg,
     umd2=umd2,
@@ -724,7 +855,10 @@ The simulation engine uses a 1 ms plant integration step (Euler method) with a 5
 
 $$G(s) = \frac{K\,e^{-\theta s}}{\tau s + 1}$$
 
-Dead time and feedback delay are each implemented as circular delay buffers. **Hysteresis** is modelled as a directional displacement offset: when voltage is increasing no offset is applied; when voltage is decreasing, the output is shifted by −Hysteresis (nm).
+Dead time and feedback delay are each implemented as circular delay buffers. **Hysteresis** is implemented as either:
+- **Simple directional offset** (default): −Hysteresis (nm) when voltage is decreasing, 0 when increasing.
+- **Bouc-Wen model** (`bw_enable = true`): physics-based nonlinear hysteresis ODE  
+  $\Delta z = A\Delta u - \beta|\Delta u|z - \gamma\Delta u|z|$, output $= -D \cdot z$. Accurately captures rate-dependent hysteresis loops. Parameters: A (pre-yield slope), β, γ (shape), D_nm (maximum hysteretic displacement).
 
 #### PID controller (D filtered on measurement)
 
@@ -841,12 +975,12 @@ To reset to factory defaults: click **Reset** then **Save Config**, or simply de
 ### Delay decomposition and Load LUT
 
 When you load a `lut_*.csv` and a matching `model_*.csv` is present, the GUI automatically assigns:
-- **θ_piezo (ms)** ← `theta_piezo_ms` — mechanical-only Piezo delay
+- **θ_piezo (µs)** ← `theta_piezo_ms × 1000` — mechanical-only Piezo delay
 - **θ_protocol (µs)** ← `theta_protocol_ms × 1000` — Moku command + serial frame + USB latency
 
 If a companion `summary_*.csv` is found, the GUI also reads `hysteresis_max_nm` (average across temperatures) and populates the **Hysteresis (nm)** field.
 
-If the model file lacks the decomposed columns (older format), the total `theta_ms` is placed into θ_piezo as a conservative fallback.
+If the model file lacks the decomposed columns (older format), `theta_ms × 1000` (converted to µs) is placed into θ_piezo as a conservative fallback.
 
 ### Auto-tune formulas
 

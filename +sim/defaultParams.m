@@ -23,4 +23,10 @@ function p = defaultParams()
     p.v_max          = 5;      % V
     p.t_total        = 2.0;   % s
     p.dt_pid_us      = 50000; % µs  controller update period
+    % Bouc-Wen hysteresis model (replaces simple offset when enabled)
+    p.bw_enable      = false; % off by default
+    p.bw_A           = 1.0;   % pre-yield slope
+    p.bw_beta        = 0.5;   % energy dissipation shape
+    p.bw_gamma       = 0.5;   % restoring shape
+    p.bw_D           = 30;    % nm  max hysteretic displacement
 end

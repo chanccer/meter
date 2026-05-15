@@ -37,6 +37,9 @@ function [t, yMeas, yTrue, vArr, errArr, distArr, spArr] = runSim(p)
     pidCnt   = 0;
     prevVEff = 0;   % for hysteresis direction tracking
 
+    useBW = isfield(p, 'bw_enable') && p.bw_enable;
+    z_bw  = 0;   % Bouc-Wen hysteretic state
+
     % PID state
     integral  = 0;
     prevYMeas = 0;
@@ -78,17 +81,20 @@ function [t, yMeas, yTrue, vArr, errArr, distArr, spArr] = runSim(p)
         % Dead-band
         vEff = max(0, vPlant - p.v_dead);
 
-        % Hysteresis: directional displacement offset
-        if vEff >= prevVEff
-            hystOffset = 0;
+        % Hysteresis
+        du = vEff - prevVEff;
+        if useBW
+            % Bouc-Wen incremental (n=1): dz = A·du - β|du|z - γ·du·|z|
+            z_bw = z_bw + p.bw_A*du - p.bw_beta*abs(du)*z_bw - p.bw_gamma*du*abs(z_bw);
+            hystComp = -p.bw_D * z_bw;
         else
-            hystOffset = -p.hysteresis_nm;
+            hystComp = double(du < 0) * (-p.hysteresis_nm);
         end
         prevVEff = vEff;
 
         % Euler integration: dy/dt = (K·vEff - y) / τ
         yState   = yState + (p.K * vEff - yState) / tau_s * DT_PLANT;
-        yTrue(k) = yState + distArr(k) + hystOffset;
+        yTrue(k) = yState + distArr(k) + hystComp;
 
         % Smith predictor: run dead-time-free model in parallel
         % (uses current vCtrl before the dead-time buffer, same dead-band)

@@ -1,28 +1,33 @@
 {
   "K": 410,
   "tau_ms": 80,
-  "theta_us": 10000,
-  "v_dead": 0,
-  "hysteresis_nm": 0,
+  "theta_us": 10,
+  "v_dead": 1,
+  "hysteresis_nm": 5,
   "noise": 5,
-  "ctrl_mode": "ADRC",
-  "kp": 0.0027177700348432056,
-  "ki": 0.027874564459930314,
-  "kd": 1.2789506046320967E-5,
-  "d_filter_n": 17,
-  "adrc_wc": 9.5238095238095237,
-  "adrc_w0": 47.61904761904762,
+  "ctrl_mode": "PID",
+  "kp": 0.0015283165496632969,
+  "ki": 0.013006395895181455,
+  "kd": 7.64110517924278E-9,
+  "d_filter_n": 200,
+  "adrc_wc": 6.4511966969872923,
+  "adrc_w0": 32.255983484936465,
   "smith_adrc": false,
-  "delay_us": 0,
+  "delay_us": 50000,
   "sp_dc": 1500,
   "v_max": 20,
   "t_total": 20,
   "dt_pid_us": 50000,
+  "bw_enable": true,
+  "bw_A": 1,
+  "bw_beta": 0.5,
+  "bw_gamma": 0.5,
+  "bw_D": 30,
   "setpoints": [
     {
       "en": true,
       "type": "Step",
-      "amp": 2000,
+      "amp": 1000,
       "period": 1,
       "t0": 0.1,
       "dur": 0
@@ -30,10 +35,18 @@
     {
       "en": true,
       "type": "Sine",
-      "amp": 2000,
-      "period": 3,
+      "amp": 500,
+      "period": 1.2,
       "t0": 0.1,
       "dur": 0
+    },
+    {
+      "en": false,
+      "type": "Triangle",
+      "amp": 700,
+      "period": 4,
+      "t0": 3,
+      "dur": 5
     }
   ],
   "signals": [
@@ -49,7 +62,7 @@
       "en": true,
       "type": "Sine",
       "amp": 700,
-      "period": 10,
+      "period": 15,
       "t0": 0,
       "dur": 0
     },
@@ -58,6 +71,14 @@
       "type": "Triangle",
       "amp": 800,
       "period": 10,
+      "t0": 0,
+      "dur": 0
+    },
+    {
+      "en": true,
+      "type": "Sine",
+      "amp": 1000,
+      "period": 15,
       "t0": 0,
       "dur": 0
     }
