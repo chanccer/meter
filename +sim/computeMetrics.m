@@ -1,7 +1,7 @@
 function [lines, statusMsg, dynMetrics] = computeMetrics(t, errArr, spArr, yTrue)
 %COMPUTEMETRICS  Step-response metrics + dynamic tracking metrics.
 %   dynMetrics.normRMS     – SS RMS as % of setpoint RMS variation
-%   dynMetrics.phaseLag_ms – output lag behind setpoint (ms, xcorr)
+%   dynMetrics.phaseLag_us – output lag behind setpoint (µs, xcorr)
 %   dynMetrics.ampRatio    – peak-to-peak output / setpoint in SS tail (%)
 
     dt = t(2) - t(1);
@@ -43,7 +43,7 @@ function [lines, statusMsg, dynMetrics] = computeMetrics(t, errArr, spArr, yTrue
             i90 = find(seg <= hi90, 1, 'first');
         end
         if ~isempty(i10) && ~isempty(i90) && i90 > i10
-            riseStr = sprintf('%.0f ms', (i90 - i10) * dt * 1000);
+            riseStr = sprintf('%.0f µs', (i90 - i10) * dt * 1e6);
         else
             riseStr = 'N/A';
         end
@@ -53,9 +53,9 @@ function [lines, statusMsg, dynMetrics] = computeMetrics(t, errArr, spArr, yTrue
         inBand  = abs(seg - yRef) < band;
         lastOut = find(~inBand, 1, 'last');
         if isempty(lastOut)
-            settleStr = '0 ms (instant)';
+            settleStr = '0 µs (instant)';
         else
-            settleStr = sprintf('%.0f ms', lastOut * dt * 1000);
+            settleStr = sprintf('%.0f µs', lastOut * dt * 1e6);
         end
 
         overStr = sprintf('%.1f%%', overshoot);
@@ -89,9 +89,9 @@ function [lines, statusMsg, dynMetrics] = computeMetrics(t, errArr, spArr, yTrue
         maxLag = min(round(numel(tail)/2), round(2/dt));
         [r, lags] = xcorr(y_z, sp_z, maxLag);
         [~, mi]   = max(r);
-        phaseLag_ms = lags(mi) * dt * 1000;
+        phaseLag_us = lags(mi) * dt * 1e6;
     else
-        phaseLag_ms = NaN;
+        phaseLag_us = NaN;
     end
 
     % 3. Amplitude ratio: P2P output / P2P setpoint in SS tail (%)
@@ -117,7 +117,7 @@ function [lines, statusMsg, dynMetrics] = computeMetrics(t, errArr, spArr, yTrue
     minApproach_nm = mean(minD);
 
     dynMetrics.normRMS        = normRMS;
-    dynMetrics.phaseLag_ms    = phaseLag_ms;
+    dynMetrics.phaseLag_us    = phaseLag_us;
     dynMetrics.ampRatio       = ampRatio;
     dynMetrics.minApproach_nm = minApproach_nm;
 
@@ -127,8 +127,8 @@ function [lines, statusMsg, dynMetrics] = computeMetrics(t, errArr, spArr, yTrue
     else
         normStr = 'N/A (static SP)';
     end
-    if ~isnan(phaseLag_ms)
-        lagStr = sprintf('%.0f ms', phaseLag_ms);
+    if ~isnan(phaseLag_us)
+        lagStr = sprintf('%.0f µs', phaseLag_us);
     else
         lagStr = 'N/A';
     end

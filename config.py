@@ -39,7 +39,7 @@ PID_INTEGRAL_LIMIT  = 0.5    # V
 ADRC_WC             = 20.0   # rad/s  控制器带宽
 ADRC_W0             = 100.0  # rad/s  ESO 带宽（通常 5×ωc）
 ADRC_K              = 410.0  # nm/V   植物增益（无模型文件时使用）
-ADRC_TAU_MS         = 80.0   # ms     时间常数（无模型文件时使用）
+ADRC_TAU_US         = 80000.0  # µs     时间常数（无模型文件时使用）
 ADRC_SMITH          = True   # Smith Predictor 开关
 
 # ── 自动整定参数 ─────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ class Config:
     adrc_wc: float           = ADRC_WC
     adrc_w0: float           = ADRC_W0
     adrc_K: float            = ADRC_K
-    adrc_tau_ms: float       = ADRC_TAU_MS
+    adrc_tau_us: float       = ADRC_TAU_US
     adrc_smith: bool         = ADRC_SMITH
     # 自动整定
     autotune_v_low: float    = AUTOTUNE_V_LOW

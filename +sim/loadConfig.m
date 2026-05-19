@@ -5,7 +5,7 @@ function p = loadConfig(configPath)
     if ~isfile(configPath), return; end
     try
         cfg = jsondecode(fileread(configPath));
-        scalarFields = {'K','tau_ms','theta_us','v_dead','hysteresis_nm', ...
+        scalarFields = {'K','tau_us','theta_us','v_dead','hysteresis_nm', ...
                         'kp','ki','kd','d_filter_n','adrc_wc','adrc_w0', ...
                         'smith_adrc','delay_us','sp_dc','noise','v_max','t_total','dt_pid_us', ...
                         'bw_enable','bw_A','bw_beta','bw_gamma','bw_D'};
@@ -15,7 +15,10 @@ function p = loadConfig(configPath)
                 p.(f) = double(cfg.(f));
             end
         end
-        % Backward compatibility: old configs stored delays in ms
+        % Backward compatibility: old configs stored delays/time in ms
+        if isfield(cfg, 'tau_ms') && ~isfield(cfg, 'tau_us')
+            p.tau_us = double(cfg.tau_ms) * 1000;
+        end
         if isfield(cfg, 'theta_ms') && ~isfield(cfg, 'theta_us')
             p.theta_us = double(cfg.theta_ms) * 1000;
         end

@@ -1,16 +1,16 @@
 function [t, yMeas, yTrue, vArr, errArr, distArr, spArr] = runSim(p)
 %RUNSIM  Discrete-time FOPDT + PID/ADRC simulation.
 %
-%   Plant integration : Euler at DT_PLANT = 1 ms.
-%   Controller update : every p.dt_pid_ms ms  (default 50 ms).
+%   Plant integration : Euler at DT_PLANT = 1 µs.
+%   Controller update : every p.dt_pid_us µs  (default 50000 µs).
 %   PID  : anti-windup integral, filtered D on measurement (no setpoint kick).
 %   ADRC : 1st-order ESO with exact ZOH discretization (via matrix exponential).
 %   Delays: circular buffers for plant dead time and sensor feedback delay.
 
-    DT_PLANT = 1e-3;                    % s  plant integration step (fixed)
+    DT_PLANT = 1e-6;                    % s  plant integration step (1 µs)
     DT_PID   = p.dt_pid_us * 1e-6;     % s  controller update period
 
-    tau_s   = p.tau_ms   * 1e-3;
+    tau_s   = p.tau_us   * 1e-6;
     theta_s = p.theta_us * 1e-6;
     delay_s = p.delay_us * 1e-6;
 

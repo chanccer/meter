@@ -248,7 +248,7 @@ PROTO_DELAY_REPS    = 10           # 协议延迟测量重复次数
 ADRC_WC             = 20.0         # 控制器带宽 ω_c rad/s（有模型辨识时由 IMC 自动设定）
 ADRC_W0             = 100.0        # ESO 带宽 ω₀ rad/s（自动设为 5·ω_c）
 ADRC_K              = 410.0        # 植物增益备用值 nm/V（辨识失败时使用）
-ADRC_TAU_MS         = 80.0         # 植物时间常数备用值 ms
+ADRC_TAU_US         = 80000.0      # 植物时间常数备用值 µs
 ADRC_SMITH          = True         # 默认启用 Smith Predictor
 ```
 
@@ -411,13 +411,13 @@ Piezo 执行器存在**机械迟滞**：在同一电压下，从低压方向接�
 |----|------|
 | `temperature_C` | 温度（°C） |
 | `K_nm_per_V` | 静态增益（nm/V） |
-| `tau_ms` | 时间常数（ms） |
-| `theta_ms` | 总纯滞后（ms）= θ_piezo + θ_protocol |
+| `tau_us` | 时间常数（µs） |
+| `theta_us` | 总纯滞后（µs）= θ_piezo + θ_protocol |
 | `v_dead_V` | 死区电压（V）——低于此电压 Piezo 不动 |
 | `r2_fit` | FOPDT 拟合优度 R² |
 | `noise_rms_nm` | 传感器噪声 RMS（nm，从静态 LUT std_nm 估算） |
-| `theta_piezo_ms` | Piezo 机械延迟（ms）= θ_total − θ_protocol |
-| `theta_protocol_ms` | 通信协议延迟（ms）= Moku 命令 + 串口帧 + USB |
+| `theta_piezo_us` | Piezo 机械延迟（µs）= θ_total − θ_protocol |
+| `theta_protocol_us` | 通信协议延迟（µs）= Moku 命令 + 串口帧 + USB |
 | `timestamp` | 辨识时间（ISO 8601） |
 
 ---
@@ -751,9 +751,9 @@ table(results)
 ```
 ┌─ 参数控制（左侧，可滚动）──────────────────────┐
 │  植物（Piezo）—— 所有 Piezo 参数集中在此        │
-│    K  (nm/V)          [    410 ]               │
-│    τ  (ms)            [     80 ]               │
-│    θ_piezo (µs)       [  10000 ]               │
+│    K  (nm/V)          [    350 ]               │
+│    τ  (µs)            [     20 ]               │
+│    θ_piezo (µs)       [    500 ]               │
 │    V dead (V)         [      0 ]               │
 │    Hysteresis (nm)    [      0 ]               │
 │    Noise RMS (nm)     [      5 ]               │
@@ -762,12 +762,14 @@ table(results)
 │    Kp [0.002]  Ki [0.027]  Kd [0]             │
 │    D filter N    [     20 ]                    │
 │  ADRC                                          │
-│    ω_c (rad/s)   [     20 ]                    │
-│    ω₀  (rad/s)   [    100 ]                    │
+│    ω_c (rad/s)   [    500 ]                    │
+│    ω₀  (rad/s)   [   2000 ]                    │
 │    Smith Predictor [ Off ▼ ]                   │
 │  反馈延迟                                       │
 │    θ_protocol (µs) [      0 ]                  │
-│  Setpoint / 干扰 / 仿真设置 …                   │
+│  仿真设置                                       │
+│    Controller DT (µs) [    1 ]                 │
+│  Setpoint / 干扰 …                              │
 └────────────────────────────────────────────────┘
 ┌─ 图表 + 指标（右侧）──────────────────────────────────────────┐
 │  ┌───────────────────┐  ┌───────────────────┐                 │
@@ -779,7 +781,7 @@ table(results)
 │  [▶ 运行] [IMC/ADRC 整定] [整定+运行] [重置] [Load LUT]       │
 │  [导出…]  [Save Config] [Dist on Error ☐]                      │
 │  ┌── 阶跃响应指标 ──────────────────────────────────────┐     │
-│  │  超调: 0.0%  上升: 120ms  调节时间: 250ms             │     │
+│  │  超调: 0.0%  上升: 120µs  调节时间: 250µs             │     │
 │  │  稳态 RMS: 0.8nm  IAE: 12.3nm·s  ITAE: 8.4nm·s²     │     │
 │  └──────────────────────────────────────────────────────┘     │
 │  ┌── 操作日志（可滚动）──────────────────────────────────┐     │
@@ -796,24 +798,25 @@ table(results)
 
 | 分组 | 参数 | 默认值 | 范围 |
 |------|------|--------|------|
-| 植物（Piezo） | K — 静态增益 (nm/V) | 410 | 10–2000 |
-| 植物（Piezo） | τ — 时间常数 (ms) | 80 | 5–500 |
-| 植物（Piezo） | θ_piezo — 机械纯滞后 (µs) | 10000 | 0–200000 |
-| 植物（Piezo） | V dead (V) — 死区电压 | 0 | 0–5 |
-| 植物（Piezo） | Hysteresis (nm) — 迟滞 | 0 | 0–500 |
-| 植物（Piezo） | Noise RMS (nm) — 噪声 | 5 | 0–50 |
+| 植物（Piezo） | K — 静态增益 (nm/V) | 350 | 0–10 000 000 |
+| 植物（Piezo） | τ — 时间常数 (µs) | 20 | 0–1 000 000 000 |
+| 植物（Piezo） | θ_piezo — 机械纯滞后 (µs) | 500 | 0–1 000 000 000 |
+| 植物（Piezo） | V dead (V) — 死区电压 | 0 | 0–1000 |
+| 植物（Piezo） | Hysteresis (nm) — 迟滞 | 0 | 0–10 000 000 |
+| 植物（Piezo） | Noise RMS (nm) — 噪声 | 0 | 0–10 000 000 |
 | 控制器 | Mode — 控制模式 | PID | PID / ADRC |
-| 控制器（PID） | Kp | 0.002 | 0–0.05 |
-| 控制器（PID） | Ki | 0.027 | 0–2.00 |
-| 控制器（PID） | Kd | 0 | 0–0.10 |
-| 控制器（PID） | D filter N — 微分滤波系数 | 20 | 0–200 |
-| ADRC | ω_c (rad/s) — 控制器带宽 | 20 | 1–500 |
-| ADRC | ω₀ (rad/s) — ESO 带宽 | 100 | 1–2000 |
+| 控制器（PID） | Kp | 0.00066 | 0–1 000 000 |
+| 控制器（PID） | Ki | 0.04482 | 0–1 000 000 |
+| 控制器（PID） | Kd | 0 | 0–1 000 000 |
+| 控制器（PID） | D filter N — 微分滤波系数 | 9 | 0–1 000 000 |
+| ADRC | ω_c (rad/s) — 控制器带宽 | 500 | 0–1 000 000 000 |
+| ADRC | ω₀ (rad/s) — ESO 带宽 | 2000 | 0–1 000 000 000 |
 | ADRC | Smith Predictor — 死时间补偿 | Off | Off / On |
-| 反馈延迟 | θ_protocol (µs) — 协议延迟 | 0 | 0–50000 |
-| Setpoint | Base DC (nm) | 0 | 0–5000 |
-| 仿真 | 仿真时长 (s) | 2.0 | 0.5–3600 |
-| 仿真 | V max (V) | 5 | 0–1000 |
+| 反馈延迟 | θ_protocol (µs) — 协议延迟 | 0 | 0–1 000 000 000 |
+| Setpoint | Base DC (nm) | 1500 | −1 000 000 000–1 000 000 000 |
+| 仿真 | 仿真时长 (s) | 2.0 | 0–1 000 000 |
+| 仿真 | V max (V) | 20 | 0–1 000 000 |
+| 仿真 | Controller DT (µs) — 控制器更新周期 | 1 | 0–1 000 000 000 |
 
 ### Setpoint（目标轨迹）发生器
 
@@ -845,9 +848,21 @@ table(results)
 
 其中 $t' = t - t_\text{start}$，$f = 1/\text{period}$。
 
+### 图表交互
+
+四个子图支持独立的鼠标缩放与平移。所有 X 轴相互绑定——任何时间轴的变化会同步到全部四个图。
+
+| 操作 | 效果 |
+|------|------|
+| 滚轮 | 缩放 X 轴（时间轴），4 个图同步 |
+| Shift + 滚轮 | 仅缩放鼠标所在图的 Y 轴 |
+| 左键拖拽 | 平移——X 轴全局同步，Y 轴仅移动当前图 |
+
+滚轮缩放**仅在鼠标位于图表区域内时有效**，在参数面板滚动不会影响图表。每次运行新仿真后，视图自动恢复到完整时间范围。
+
 ### 仿真模型
 
-仿真引擎采用 1 ms 植物积分步长（欧拉法）和 50 ms 控制器更新周期。
+仿真引擎采用 **1 µs 植物积分步长**（欧拉法）。控制器更新周期由 **Controller DT (µs)** 参数指定（默认 1 µs；增大此值可降低长时仿真的 CPU 占用）。
 
 **植物模型**（带迟滞的一阶加纯滞后 FOPDT）：
 
@@ -888,7 +903,7 @@ $$u = \frac{\omega_c (r - z_1) + \dot{r} - z_2}{b_0}, \quad \dot{r} = \frac{r[k]
 
 $$y_\text{eso} = y_\text{meas} + (y_\text{model} - y_\text{model,delayed})$$
 
-从 ESO 的有效死时间中去除 θ_plant，从而可以设置更高的 ω_c 而不失稳。开启后 IMC 整定会自动排除 θ_plant 的影响。
+从 ESO 的有效死时间中去除 θ_plant，从而可以设置更高的 ω_c 而不失稳。**切换 Smith Predictor 时自动触发 IMC 整定**，ω_c 立即更新（Off: ≈1921 rad/s；On: ≈48780 rad/s，τ=20µs、θ=500µs 时）。运行日志在 Smith 激活时显示 `[Smith ON]` 标记。
 
 **调参建议：**
 - 初始推荐：$\omega_c = 1/(\tau + \theta)$，$\omega_0 = 5\,\omega_c$
@@ -903,8 +918,8 @@ $$y_\text{eso} = y_\text{meas} + (y_\text{model} - y_\text{model,delayed})$$
 | 指标 | 定义 |
 |------|------|
 | 超调 (%) | $(y_\text{峰值} - y_\text{目标}) / \|y_\text{阶跃}\| \times 100$ |
-| 上升时间 (ms) | 从阶跃幅值 10% 到 90% 所需的时间 |
-| 调节时间 (ms) | 输出最后一次离开 ±2% 误差带的时刻 |
+| 上升时间 (µs) | 从阶跃幅值 10% 到 90% 所需的时间 |
+| 调节时间 (µs) | 输出最后一次离开 ±2% 误差带的时刻 |
 | 稳态 RMS 误差 (nm) | 仿真最后 10% 时段内误差的 RMS 值 |
 | IAE (nm·s) | $\int_0^T \|e(t)\|\,dt$，累积绝对误差 |
 | ITAE (nm·s²) | $\int_0^T t\,\|e(t)\|\,dt$，对后期误差加权更重 |
@@ -941,24 +956,24 @@ JSON 文件可读性良好，可手动编辑或纳入版本控制：
 
 ```json
 {
-  "K": 410,
-  "tau_ms": 80,
-  "theta_us": 8500,
-  "v_dead": 0.15,
-  "hysteresis_nm": 35.0,
-  "noise": 5,
+  "K": 350,
+  "tau_us": 20,
+  "theta_us": 500,
+  "v_dead": 0,
+  "hysteresis_nm": 0,
+  "noise": 0,
   "ctrl_mode": "ADRC",
-  "kp": 0.00217,
-  "ki": 0.02708,
+  "kp": 0.00066,
+  "ki": 0.04482,
   "kd": 0.0,
-  "d_filter_n": 20,
-  "adrc_wc": 20,
-  "adrc_w0": 100,
+  "d_filter_n": 9,
+  "adrc_wc": 500,
+  "adrc_w0": 2000,
   "smith_adrc": false,
-  "delay_us": 3800,
-  "dt_pid_us": 50000,
-  "sp_dc": 0,
-  "v_max": 5,
+  "delay_us": 0,
+  "dt_pid_us": 1,
+  "sp_dc": 1500,
+  "v_max": 20,
   "t_total": 2.0,
   "setpoints": [
     {"en": true, "type": "Step", "amp": 1000, "period": 1.0, "t0": 0.1, "dur": 0.0}
@@ -967,7 +982,7 @@ JSON 文件可读性良好，可手动编辑或纳入版本控制：
 }
 ```
 
-> **向后兼容：** 旧版配置文件中的 `theta_ms`（毫秒）和 `dt_pid_ms` 字段在加载时自动乘以 1000 转换为 `theta_us` / `dt_pid_us`（微秒）。
+> **向后兼容：** 旧版配置文件中的 `tau_ms`、`theta_ms`（毫秒）和 `dt_pid_ms` 字段在加载时自动乘以 1000 转换为 `tau_us` / `theta_us` / `dt_pid_us`（微秒）。
 
 恢复出厂默认值：点击 **重置** 后再点 **Save Config**，或直接删除 `simulate_config.json`。
 
@@ -976,8 +991,8 @@ JSON 文件可读性良好，可手动编辑或纳入版本控制：
 加载 `lut_*.csv` 时：
 
 - 若同名 `model_*.csv` 存在且包含延迟分解字段，GUI 自动填入：
-  - **θ_piezo (µs)** ← `theta_piezo_ms × 1000`（Piezo 机械延迟）
-  - **θ_protocol (µs)** ← `theta_protocol_ms × 1000`（Moku 命令 + 串口帧 + USB 延迟）
+  - **θ_piezo (µs)** ← `theta_piezo_us`（Piezo 机械延迟）
+  - **θ_protocol (µs)** ← `theta_protocol_us`（Moku 命令 + 串口帧 + USB 延迟）
 - 若同名 `summary_*.csv` 存在，GUI 自动读取 `hysteresis_max_nm`（各温度均值）并填入 **Hysteresis (nm)** 字段
 - 若模型文件为旧格式（无延迟分解列），则将 `theta_ms × 1000`（转换为 µs）填入 θ_piezo 作为保守回退值
 

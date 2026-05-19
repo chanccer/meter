@@ -120,7 +120,7 @@ def run_trajectory_control(
 
     # ── 植物参数 ─────────────────────────────────────────────────────────────
     K              = model.K              if model else cfg.adrc_K
-    tau_s          = model.tau_s          if model else cfg.adrc_tau_ms * 1e-3
+    tau_s          = model.tau_s          if model else cfg.adrc_tau_us * 1e-6
     theta_plant_s  = model.theta_plant_s  if model else 0.0
     theta_sensor_s = model.theta_sensor_s if model else 0.0
     v_dead         = model.v_dead_V       if model else 0.0
@@ -157,7 +157,7 @@ def run_trajectory_control(
     print(f"波形     : {waveform}  f={freq_hz:.3f}Hz  A=±{amp_nm:.0f}nm  中心={offset_nm:.0f}nm")
     print(f"时长     : {duration_s:.1f}s  ({N} 步 × {dt*1000:.0f}ms)")
     print(f"ADRC{smith_tag}  ωc={wc:.1f} rad/s  ω₀={w0:.1f} rad/s")
-    print(f"植物模型 : K={K:.0f}nm/V  τ={tau_s*1000:.1f}ms  θ_p={theta_plant_s*1000:.1f}ms")
+    print(f"植物模型 : K={K:.0f}nm/V  τ={tau_s*1e6:.1f}µs  θ_p={theta_plant_s*1e6:.1f}µs")
     if generator.bandwidth_warning:
         print(f"  ⚠ 频率 {freq_hz:.2f} Hz 超出系统带宽，跟踪幅度将衰减")
 

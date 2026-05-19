@@ -9,7 +9,7 @@ classdef test_simulate < matlab.unittest.TestCase
     methods (Test)
         function test_defaultParams_requiredFields(tc)
             p = sim.defaultParams();
-            required = {'K','tau_ms','theta_us','v_dead','hysteresis_nm', ...
+            required = {'K','tau_us','theta_us','v_dead','hysteresis_nm', ...
                         'noise','ctrl_mode','kp','ki','kd','d_filter_n', ...
                         'adrc_wc','adrc_w0','smith_adrc','delay_us','sp_dc', ...
                         'setpoints','signals','v_max','t_total','dt_pid_us'};
@@ -23,7 +23,7 @@ classdef test_simulate < matlab.unittest.TestCase
             p = sim.defaultParams();
             tc.assertEqual(p.ctrl_mode,     'PID');
             tc.assertEqual(p.K,             410,  'AbsTol',1e-9);
-            tc.assertEqual(p.tau_ms,        80,   'AbsTol',1e-9);
+            tc.assertEqual(p.tau_us,        80000,'AbsTol',1e-9);
             tc.assertEqual(p.theta_us,      10000,'AbsTol',1e-9);
             tc.assertEqual(p.noise,         5,    'AbsTol',1e-9);
             tc.assertEqual(p.v_max,         5,    'AbsTol',1e-9);
@@ -339,7 +339,7 @@ classdef test_simulate < matlab.unittest.TestCase
             % Default: theta=10000µs, delay=0µs, dt_pid=50000µs → θ_eff=35ms
             p   = sim.defaultParams();
             g   = sim.imcTune(p);
-            tau = p.tau_ms * 1e-3;
+            tau = p.tau_us * 1e-6;
             K   = p.K;
             te  = p.theta_us*1e-6 + p.delay_us*1e-6 + p.dt_pid_us*1e-6/2;
             lam = 2 * te;
@@ -546,13 +546,13 @@ classdef test_simulate < matlab.unittest.TestCase
         function test_loadConfig_backwardCompat_theta_ms(tc)
             % Old configs that stored theta_ms (ms) must be auto-converted to theta_us (µs)
             tmp = [tempname '.json'];
-            cfg = struct('K',410,'tau_ms',80,'theta_ms',15,'v_max',5, ...
+            cfg = struct('K',410,'tau_ms',80,'theta_ms',15,'v_max',5, ...  % old ms format
                          't_total',2,'ctrl_mode','PID');
             fid = fopen(tmp,'w');  fprintf(fid,'%s',jsonencode(cfg));  fclose(fid);
             p = sim.loadConfig(tmp);
             delete(tmp);
-            tc.assertEqual(p.theta_us, 15000, 'AbsTol', 1e-9, ...
-                'theta_ms=15 should become theta_us=15000');
+            tc.assertEqual(p.tau_us,   80000, 'AbsTol', 1e-9, 'tau_ms=80 should become tau_us=80000');
+            tc.assertEqual(p.theta_us, 15000, 'AbsTol', 1e-9, 'theta_ms=15 should become theta_us=15000');
         end
 
         function test_loadConfig_backwardCompat_dt_pid_ms(tc)
@@ -609,7 +609,7 @@ classdef test_simulate < matlab.unittest.TestCase
             tmp = [tempname '.json'];
             p0 = sim.defaultParams();
             p0.K             = 999;
-            p0.tau_ms        = 123;
+            p0.tau_us        = 123000;
             p0.ctrl_mode     = 'ADRC';
             p0.adrc_wc       = 42;
             p0.hysteresis_nm = 77;
@@ -618,7 +618,7 @@ classdef test_simulate < matlab.unittest.TestCase
             p1 = sim.loadConfig(tmp);
             delete(tmp);
             tc.assertEqual(p1.K,             999, 'AbsTol',1e-9);
-            tc.assertEqual(p1.tau_ms,        123, 'AbsTol',1e-9);
+            tc.assertEqual(p1.tau_us,        123000, 'AbsTol',1e-9);
             tc.assertEqual(p1.ctrl_mode,     'ADRC');
             tc.assertEqual(p1.adrc_wc,       42,  'AbsTol',1e-9);
             tc.assertEqual(p1.hysteresis_nm, 77,  'AbsTol',1e-9);
@@ -642,7 +642,7 @@ classdef test_simulate < matlab.unittest.TestCase
             p  = sim.loadConfig('/nonexistent/path/no_such_file.json');
             p0 = sim.defaultParams();
             tc.assertEqual(p.K,         p0.K,         'AbsTol',1e-9);
-            tc.assertEqual(p.tau_ms,    p0.tau_ms,    'AbsTol',1e-9);
+            tc.assertEqual(p.tau_us,    p0.tau_us,    'AbsTol',1e-9);
             tc.assertEqual(p.ctrl_mode, p0.ctrl_mode);
         end
 

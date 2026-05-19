@@ -13,9 +13,9 @@ function gains = imcTune(p)
 %   (Åström & Hägglund 1995, Ch. 8).
 %
 %   Each term maps to a field in p:
-%       θ_plant      ← p.theta_ms   (ms)   Piezo mechanical dead time
+%       θ_plant      ← p.theta_us   (µs)   Piezo mechanical dead time
 %       θ_sensor     ← p.delay_us   (µs)   Sensor / protocol feedback delay
-%       DT/2         ← p.dt_pid_ms  (ms)   Controller update period
+%       DT/2         ← p.dt_pid_us  (µs)   Controller update period
 %
 %   PID formulas (Rivera et al. 1986, λ = 2·θ_eff  → conservative):
 %       Kp = (τ + θ_eff/2) / [K·(λ + θ_eff/2)]
@@ -27,7 +27,7 @@ function gains = imcTune(p)
 %       ω_c = 1 / (τ + θ_eff)
 %       ω_0 = 5 · ω_c
 
-    tau_s   = p.tau_ms   * 1e-3;    % plant time constant (s)
+    tau_s   = p.tau_us   * 1e-6;    % plant time constant (s)
     theta_s = p.theta_us * 1e-6;    % plant dead time (s)
     delay_s = p.delay_us * 1e-6;    % sensor / protocol delay (s)
     dt_pid  = p.dt_pid_us * 1e-6;   % controller update period (s)

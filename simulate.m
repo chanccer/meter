@@ -18,7 +18,7 @@ function simulate()
 %   ----------------
 %   Plant      : FOPDT  G(s) = K·exp(-θs) / (τs+1)
 %   Controller : Discrete-time PI with anti-windup
-%   Time steps : 1 ms plant integration (Euler), 50 ms PI update
+%   Time steps : 1 µs plant integration (Euler), configurable controller DT
 %   Delays     : Circular buffers for plant dead time and feedback delay
 %   Setpoint   : Configurable waveform generator (Step/Sine/Square/…)
 %   Disturbance: Stackable waveform generator (Sine/Square/Sawtooth/…)
@@ -76,6 +76,14 @@ title(axDisp,'Displacement (nm)');      ylabel(axDisp,'nm');
 title(axErr, 'Positioning Error (nm)'); ylabel(axErr,'nm');
 title(axVolt,'Control Voltage (V)');    ylabel(axVolt,'V');
 title(axDist,'Disturbance (nm)');       ylabel(axDist,'nm');
+
+% Link X axes: scrolling time-axis zooms all 4 plots in sync
+linkaxes([axDisp, axErr, axVolt, axDist], 'x');
+
+% Keep only export + data-cursor in each axes toolbar; scroll+drag handle zoom/pan
+for ax = [axDisp, axErr, axVolt, axDist]
+    axtoolbar(ax, {'export', 'datacursor'});
+end
 
 % Button row (rightGL row 3)
 btnGL = uigridlayout(rightGL, [1 8]);
@@ -165,35 +173,36 @@ R = 0;   % row counter (shared by nested helpers below)
 
 % ── Rows 1-7: Plant (Piezo) — all piezo parameters in one place ─────────────
 sectionLabel('Plant (Piezo)');
-sK      = mkField('K  (nm/V)',        10, 2000,  p.K);
-sTau    = mkField('τ  (ms)',            5,  500,  p.tau_ms);
-sTh     = mkField('θ_piezo (µs)',       0, 200000, p.theta_us);
-sVdead  = mkField('V dead (V)',         0,    5,  p.v_dead);
-sHyst   = mkField('Hysteresis (nm)',    0,  500,  p.hysteresis_nm);
-sNoise  = mkField('Noise RMS (nm)',     0,   50,  p.noise);
+sK      = mkField('K  (nm/V)',         0,   1e7,  p.K);
+sTau    = mkField('τ  (µs)',            0,   1e9,  p.tau_us);
+sTh     = mkField('θ_piezo (µs)',       0,   1e9,  p.theta_us);
+sVdead  = mkField('V dead (V)',         0,   1000, p.v_dead);
+sHyst   = mkField('Hysteresis (nm)',    0,   1e7,  p.hysteresis_nm);
+sNoise  = mkField('Noise RMS (nm)',     0,   1e7,  p.noise);
 
 % ── Rows 8-13: Controller ───────────────────────────────────────────────────
 sectionLabel('Controller');
 sCtrl = mkDropdown('Mode', {'PID','ADRC'}, p.ctrl_mode);
-sKp   = mkField('Kp',          0, 0.05,  p.kp);
-sKi   = mkField('Ki',          0, 2.00,  p.ki);
-sKd   = mkField('Kd',          0, 0.10,  p.kd);
-sDN   = mkField('D filter N',  0,  200,  p.d_filter_n);
+sKp   = mkField('Kp',          0,   1e6,  p.kp);
+sKi   = mkField('Ki',          0,   1e6,  p.ki);
+sKd   = mkField('Kd',          0,   1e6,  p.kd);
+sDN   = mkField('D filter N',  0,   1e6,  p.d_filter_n);
 
 % ── Rows 14-17: ADRC ────────────────────────────────────────────────────────
 sectionLabel('ADRC');
-sWc    = mkField('ω_c  (rad/s)',  1,  500, p.adrc_wc);
-sW0    = mkField('ω₀   (rad/s)', 1, 2000, p.adrc_w0);
+sWc    = mkField('ω_c  (rad/s)',  0,   1e9,  p.adrc_wc);
+sW0    = mkField('ω₀   (rad/s)', 0,   1e9,  p.adrc_w0);
 smithItems = {'On','Off'};
 sSmith = mkDropdown('Smith Predictor', smithItems, smithItems{2 - p.smith_adrc});
+sSmith.ValueChangedFcn = @(~,~) onSmithToggle();
 
 % ── Row 18-19: Feedback delay ───────────────────────────────────────────────
 sectionLabel('Feedback Delay');
-sDel = mkField('θ_protocol (µs)', 0, 50000, p.delay_us);
+sDel = mkField('θ_protocol (µs)', 0,   1e9,  p.delay_us);
 
 % ── Rows 20-23: Setpoint generator ─────────────────────────────────────────
 sectionLabel('Setpoint');
-sSPdc = mkField('Base DC (nm)', 0, 5000, p.sp_dc);
+sSPdc = mkField('Base DC (nm)', -1e9, 1e9,  p.sp_dc);
 
 selectedSPRow = 0;
 R = R + 1;   % R=22: setpoint table
@@ -242,18 +251,18 @@ uibutton(bgGL,'Text','− Remove', 'FontSize',8,'ButtonPushedFcn',@(~,~) onRemov
 
 % ── Rows 27-30: Simulation ──────────────────────────────────────────────────
 sectionLabel('Simulation');
-sTot  = mkField('Duration (s)',        0.5, 3600, p.t_total);
-sVmax = mkField('V max (V)',           0,   1000, p.v_max);
-sDT   = mkField('Controller DT (µs)', 1000, 500000, p.dt_pid_us);
+sTot  = mkField('Duration (s)',        0,    1e6,  p.t_total);
+sVmax = mkField('V max (V)',           0,    1e6,  p.v_max);
+sDT   = mkField('Controller DT (µs)', 0,    1e9,  p.dt_pid_us);
 
 % ── Rows 31-36: Bouc-Wen Hysteresis ────────────────────────────────────────
 sectionLabel('Bouc-Wen Hysteresis');
 bwItems = {'Off','On'};
 sBWen   = mkDropdown('Enable', bwItems, bwItems{1 + p.bw_enable});
-sBWA    = mkField('A  (pre-yield)',   0.01, 10,  p.bw_A);
-sBWbeta = mkField('β  (dissipat.)',   0,    5,   p.bw_beta);
-sBWgam  = mkField('γ  (restoring)',   0,    5,   p.bw_gamma);
-sBWD    = mkField('D  (nm)',          0,    500, p.bw_D);
+sBWA    = mkField('A  (pre-yield)',   0,    1e6,  p.bw_A);
+sBWbeta = mkField('β  (dissipat.)',   0,    1e6,  p.bw_beta);
+sBWgam  = mkField('γ  (restoring)',   0,    1e6,  p.bw_gamma);
+sBWD    = mkField('D  (nm)',          0,    1e9,  p.bw_D);
 
 % Apply initial controller mode state (enable/disable relevant fields)
 % Inline the initial state — avoids calling a nested function before its
@@ -270,11 +279,26 @@ sCtrl.ValueChangedFcn = @(dd,~) onCtrlModeChange(dd.Value);
 % Last simulation output — lets overlay toggle redraw without re-running
 simData = [];
 
+% Independent axis zoom via scroll wheel:
+%   Scroll        → X zoom on ALL plots (time axis, synchronized)
+%   Shift+Scroll  → Y zoom on the hovered plot only
+fig.WindowScrollWheelFcn = @onScroll;
+
+% Pan via left-click drag:
+%   Drag          → pan X (all linked) + Y (hovered plot only)
+dragAx       = [];
+dragInitXLim = [0, 1];
+dragInitYLim = [0, 1];
+dragInitPt   = [0, 0];
+fig.WindowButtonDownFcn   = @onMouseDown;
+fig.WindowButtonMotionFcn = @onMouseMove;
+fig.WindowButtonUpFcn     = @onMouseUp;
+
 % ================================================================== callbacks
 
     function readP()
         p.K              = sK.Value;
-        p.tau_ms         = sTau.Value;
+        p.tau_us         = sTau.Value;
         p.theta_us       = sTh.Value;
         p.v_dead         = sVdead.Value;
         p.hysteresis_nm  = sHyst.Value;
@@ -303,7 +327,9 @@ simData = [];
 
     function onRun()
         readP();
-        appendLog(sprintf('Running %s simulation  (%.1f s)…', p.ctrl_mode, p.t_total));
+        smithNote = '';
+        if strcmp(p.ctrl_mode,'ADRC') && p.smith_adrc, smithNote = ' [Smith ON]'; end
+        appendLog(sprintf('Running %s%s simulation  (%.1f s)…', p.ctrl_mode, smithNote, p.t_total));
         try
             [t, yMeas, yTrue, vArr, errArr, distArr, spArr] = sim.runSim(p);
             [mStr, statusMsg, dynM] = sim.computeMetrics(t, errArr, spArr, yTrue);
@@ -357,6 +383,13 @@ simData = [];
         end
     end
 
+    function onSmithToggle()
+        % When Smith is toggled, immediately re-tune so the gain change is visible.
+        if strcmp(sCtrl.Value, 'ADRC')
+            onAutotune();
+        end
+    end
+
     function onAutotuneRun()
         appendLog('── Auto-tune + Test ─────────────────────────────────');
         onAutotune();
@@ -366,7 +399,7 @@ simData = [];
     function onReset()
         p0 = sim.defaultParams();
         sK.Value         = p0.K;
-        sTau.Value       = p0.tau_ms;
+        sTau.Value       = p0.tau_us;
         sTh.Value        = p0.theta_us;
         sVdead.Value     = p0.v_dead;
         sHyst.Value      = p0.hysteresis_nm;
@@ -426,16 +459,24 @@ simData = [];
                     if ismember('K_nm_per_V', vars) && height(mTbl) > 0
                         row = mTbl(1,:);
                         sK.Value   = clampV(row.K_nm_per_V, sK.Limits);
-                        sTau.Value = clampV(row.tau_ms,     sTau.Limits);
-
-                        if ismember('theta_piezo_ms', vars) && ismember('theta_protocol_ms', vars)
-                            sTh.Value  = clampV(row.theta_piezo_ms,         sTh.Limits);
-                            sDel.Value = clampV(row.theta_protocol_ms*1000,  sDel.Limits);
-                            thetaStr   = sprintf('θ_piezo=%.1fms  θ_proto=%.1fms', ...
-                                         row.theta_piezo_ms, row.theta_protocol_ms);
+                        if ismember('tau_us', vars)
+                            sTau.Value = clampV(row.tau_us, sTau.Limits);
                         else
-                            sTh.Value = clampV(row.theta_ms, sTh.Limits);
-                            thetaStr  = sprintf('θ=%.1fms (total)', row.theta_ms);
+                            sTau.Value = clampV(row.tau_ms * 1000, sTau.Limits);
+                        end
+
+                        if ismember('theta_piezo_us', vars) && ismember('theta_protocol_us', vars)
+                            sTh.Value  = clampV(row.theta_piezo_us,        sTh.Limits);
+                            sDel.Value = clampV(row.theta_protocol_us,     sDel.Limits);
+                            thetaStr   = sprintf('θ_piezo=%.1fµs  θ_proto=%.1fµs', ...
+                                         row.theta_piezo_us, row.theta_protocol_us);
+                        elseif ismember('theta_piezo_ms', vars) && ismember('theta_protocol_ms', vars)
+                            sTh.Value  = clampV(row.theta_piezo_ms * 1000, sTh.Limits);
+                            sDel.Value = clampV(row.theta_protocol_ms * 1000, sDel.Limits);
+                            thetaStr   = sprintf('θ_piezo=%.1fµs  θ_proto=%.1fµs', ...
+                                         row.theta_piezo_ms*1000, row.theta_protocol_ms*1000);
+                        else
+                            thetaStr  = sprintf('θ=%.1fµs (total)', row.theta_us);
                         end
 
                         if ismember('v_dead_V', vars)
@@ -451,8 +492,8 @@ simData = [];
                         tStr = strjoin(arrayfun(@(x) sprintf('%.0f',x), ...
                                mTbl.temperature_C, 'UniformOutput',false), ', ');
                         appendLog(sprintf( ...
-                            'LUT+Model: K=%.0f nm/V  τ=%.0f ms  %s  Vdead=%.2fV  noise≈%.1f nm | T=[%s]°C', ...
-                            row.K_nm_per_V, row.tau_ms, thetaStr, row.v_dead_V, noiseVal, tStr));
+                            'LUT+Model: K=%.0f nm/V  τ=%.0f µs  %s  Vdead=%.2fV  noise≈%.1f nm | T=[%s]°C', ...
+                            row.K_nm_per_V, sTau.Value, thetaStr, row.v_dead_V, noiseVal, tStr));
                         modelLoaded = true;
                     end
                 end
@@ -525,6 +566,74 @@ simData = [];
 
     function s = onOffStr(b)
         if b, s = 'on'; else, s = 'off'; end
+    end
+
+    function hitAx = findHoveredAx()
+        % Pixel-based hit test: compare cursor position against each axes rect.
+        % fig.CurrentPoint gives cursor in figure pixels (origin = bottom-left).
+        % getpixelposition(..., true) gives screen-absolute pixels; subtract
+        % figure origin to get figure-relative coords for comparison.
+        hitAx  = [];
+        pt     = fig.CurrentPoint;
+        figScr = getpixelposition(fig, true);
+        candAx = [axDisp, axErr, axVolt, axDist];
+        for ii = 1:4
+            ap = getpixelposition(candAx(ii), true);
+            rx = ap(1) - figScr(1);
+            ry = ap(2) - figScr(2);
+            if pt(1) >= rx && pt(1) <= rx+ap(3) && ...
+               pt(2) >= ry && pt(2) <= ry+ap(4)
+                hitAx = candAx(ii);
+                return;
+            end
+        end
+    end
+
+    function onScroll(~, evt)
+        hitAx = findHoveredAx();
+        if isempty(hitAx), return; end
+
+        % 1.2× per scroll tick; positive VerticalScrollCount = wheel away = zoom out
+        factor = 1.2 ^ double(evt.VerticalScrollCount);
+
+        mods = fig.CurrentModifier;
+        if ~isempty(mods) && any(strcmp(mods, 'shift'))
+            % Shift+Scroll: Y zoom on hovered axis only
+            yl = hitAx.YLim;
+            cy = mean(yl);
+            hitAx.YLim = cy + (yl - cy) * factor;
+        else
+            % Scroll: X zoom — update one axis; linkaxes propagates to all
+            xl = hitAx.XLim;
+            cx = mean(xl);
+            hitAx.XLim = cx + (xl - cx) * factor;
+        end
+    end
+
+    function onMouseDown(~, ~)
+        if ~strcmp(fig.SelectionType, 'normal'), return; end  % left-click only
+        ax = findHoveredAx();
+        if isempty(ax), return; end
+        dragAx       = ax;
+        dragInitXLim = ax.XLim;
+        dragInitYLim = ax.YLim;
+        dragInitPt   = ax.CurrentPoint(1, 1:2);  % grab point in data coords
+    end
+
+    function onMouseMove(~, ~)
+        if isempty(dragAx), return; end
+        % Temporarily restore initial limits so CurrentPoint is in original data space,
+        % then compute the shift needed to keep the grab point under the cursor.
+        dragAx.XLim = dragInitXLim;
+        dragAx.YLim = dragInitYLim;
+        curPt  = dragAx.CurrentPoint(1, 1:2);
+        shift  = dragInitPt - curPt;          % how far cursor moved in data coords
+        dragAx.XLim = dragInitXLim + shift(1);  % linkaxes syncs X to all plots
+        dragAx.YLim = dragInitYLim + shift(2);
+    end
+
+    function onMouseUp(~, ~)
+        dragAx = [];
     end
 
     function appendLog(msg)
@@ -625,8 +734,8 @@ simData = [];
 
         % ── Phase lag: text annotation ──────────────────────────────
         if cbPhaseLag.Value
-            if ~isnan(m.phaseLag_ms)
-                lbl = sprintf('Phase lag: %.0f ms', m.phaseLag_ms);
+            if ~isnan(m.phaseLag_us)
+                lbl = sprintf('Phase lag: %.0f µs', m.phaseLag_us);
             else
                 lbl = 'Phase lag: N/A';
             end

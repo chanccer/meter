@@ -234,7 +234,7 @@ def run_adrc_control(
     参数
     ----
     model : 由 identify_model() 返回的 FOPDT 参数（可选）。
-            若为 None，使用 cfg.adrc_K / cfg.adrc_tau_ms 作为植物模型默认值。
+            若为 None，使用 cfg.adrc_K / cfg.adrc_tau_us 作为植物模型默认值。
     """
     from control.adrc import ADRCController, SmithPredictor
     from tune.imc import imc_tune_from_model
@@ -245,7 +245,7 @@ def run_adrc_control(
 
     # 植物参数（优先使用辨识结果）
     K     = model.K       if model else cfg.adrc_K
-    tau_s = model.tau_s   if model else cfg.adrc_tau_ms * 1e-3
+    tau_s = model.tau_s   if model else cfg.adrc_tau_us * 1e-6
     theta_plant_s  = model.theta_plant_s  if model else 0.0
     theta_sensor_s = model.theta_sensor_s if model else 0.0
     v_dead = model.v_dead_V if model else 0.0
@@ -273,7 +273,7 @@ def run_adrc_control(
     print(f"{'=' * 40}")
     print(f"目标位移 : {target_nm:.1f} nm   温度: {temperature_C}°C")
     print(f"ADRC{smith_tag}  ωc={wc:.1f} rad/s  ω₀={w0:.1f} rad/s")
-    print(f"植物模型 : K={K:.0f}nm/V  τ={tau_s*1000:.1f}ms  θ_p={theta_plant_s*1000:.1f}ms")
+    print(f"植物模型 : K={K:.0f}nm/V  τ={tau_s*1e6:.1f}µs  θ_p={theta_plant_s*1e6:.1f}µs")
     print(f"收敛条件 : |误差| < {cfg.pid_tolerance_nm} nm  连续 {cfg.pid_converge_count} 次")
     print(f"超时     : {cfg.pid_timeout_s} s")
 

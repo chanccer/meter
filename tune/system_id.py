@@ -151,8 +151,8 @@ class AutoTuner:
         print(f"\n{'─' * 40}")
         print("模型识别结果（FOPDT）：")
         print(f"  增益     K  = {r.K_nm_per_V:.1f} nm/V")
-        print(f"  时间常数 τ  = {r.tau_s * 1000:.1f} ms")
-        print(f"  纯滞后   θ  = {r.theta_s * 1000:.1f} ms")
+        print(f"  时间常数 τ  = {r.tau_s * 1e6:.1f} µs")
+        print(f"  纯滞后   θ  = {r.theta_s * 1e6:.1f} µs")
         print(f"\n整定结果（{r.method}）：")
         print(f"  Kp = {r.kp:.6f} V/nm")
         print(f"  Ki = {r.ki:.6f} V/(nm·s)")
@@ -170,10 +170,10 @@ def measure_protocol_delay(
     """
     测量通信协议延迟，分解为两部分：
 
-    1. t_moku_ms  — Moku set_voltage() 调用耗时
-    2. t_frame_ms — µMD2 帧到达延迟
+    1. t_moku_us  — Moku set_voltage() 调用耗时
+    2. t_frame_us — µMD2 帧到达延迟
 
-    返回：(t_moku_ms, t_frame_ms)
+    返回：(t_moku_us, t_frame_us)
     """
     reps  = cfg.proto_delay_reps
     ch    = cfg.moku_channel
@@ -187,25 +187,25 @@ def measure_protocol_delay(
     for _ in range(reps):
         t0 = time.monotonic()
         moku.set_voltage(ch, v_ref)
-        cmd_times.append((time.monotonic() - t0) * 1000.0)
-    t_moku_ms = float(np.mean(cmd_times))
+        cmd_times.append((time.monotonic() - t0) * 1e6)
+    t_moku_us = float(np.mean(cmd_times))
 
     umd2.flush_queue()
     frame_times: list[float] = []
     for _ in range(reps):
         ft = umd2.measure_frame_interval(timeout=0.5)
         if ft is not None:
-            frame_times.append(ft)
-    t_frame_ms = float(np.mean(frame_times)) if frame_times else 0.0
+            frame_times.append(ft * 1e6)
+    t_frame_us = float(np.mean(frame_times)) if frame_times else 0.0
 
-    t_protocol_ms = t_moku_ms + t_frame_ms
-    print(f"Moku={t_moku_ms:.2f}ms  帧={t_frame_ms:.2f}ms  合计={t_protocol_ms:.2f}ms")
+    t_protocol_us = t_moku_us + t_frame_us
+    print(f"Moku={t_moku_us:.2f}µs  帧={t_frame_us:.2f}µs  合计={t_protocol_us:.2f}µs")
     logger.info(
-        f"[协议延迟] Moku命令={t_moku_ms:.2f}ms  "
-        f"串口/USB帧={t_frame_ms:.2f}ms  "
-        f"总协议延迟={t_protocol_ms:.2f}ms"
+        f"[协议延迟] Moku命令={t_moku_us:.2f}µs  "
+        f"串口/USB帧={t_frame_us:.2f}µs  "
+        f"总协议延迟={t_protocol_us:.2f}µs"
     )
-    return t_moku_ms, t_frame_ms
+    return t_moku_us, t_frame_us
 
 
 def identify_model(
@@ -234,8 +234,8 @@ def identify_model(
     print(f"\n{'─' * 40}")
     print(f"[模型辨识] {temp_C}°C  阶跃 {v_low:.1f}→{v_high:.1f}V  重复 {reps} 次")
 
-    t_moku_ms, t_frame_ms = measure_protocol_delay(cfg, umd2, moku, logger)
-    t_protocol_ms = t_moku_ms + t_frame_ms
+    t_moku_us, t_frame_us = measure_protocol_delay(cfg, umd2, moku, logger)
+    t_protocol_us = t_moku_us + t_frame_us
 
     tuner = AutoTuner(cfg, umd2, moku, logger)
     Ks: list[float] = []
@@ -270,7 +270,7 @@ def identify_model(
             ss_tot = float(np.sum((d_np - float(np.mean(d_np))) ** 2))
             r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
             Ks.append(K); taus.append(tau); thetas.append(theta); r2s.append(r2)
-            print(f"K={K:.0f}nm/V  τ={tau*1000:.0f}ms  θ={theta*1000:.1f}ms  R²={r2:.3f}")
+            print(f"K={K:.0f}nm/V  τ={tau*1e6:.0f}µs  θ={theta*1e6:.1f}µs  R²={r2:.3f}")
         except Exception as e:
             logger.warning(f"[模型辨识] 第 {rep} 次拟合异常: {e}")
 
@@ -303,29 +303,29 @@ def identify_model(
                         v_dead = float(row["voltage_V"])
                         break
 
-    theta_total_ms = theta_mean * 1000
-    theta_piezo_ms = max(0.0, theta_total_ms - t_protocol_ms)
+    theta_total_us = theta_mean * 1e6
+    theta_piezo_us = max(0.0, theta_total_us - t_protocol_us)
 
     params = ModelParams(
         temperature_C=temp_C,
         K_nm_per_V=K_mean,
-        tau_ms=tau_mean * 1000,
-        theta_ms=theta_total_ms,
+        tau_us=tau_mean * 1e6,
+        theta_us=theta_total_us,
         v_dead_V=v_dead,
         r2_fit=r2_mean,
         noise_rms_nm=noise_rms,
-        theta_piezo_ms=theta_piezo_ms,
-        theta_protocol_ms=t_protocol_ms,
+        theta_piezo_us=theta_piezo_us,
+        theta_protocol_us=t_protocol_us,
         timestamp=datetime.now().isoformat(timespec="seconds"),
     )
 
     print(f"\n  结果（{len(Ks)}/{reps} 次有效）：")
     print(f"  K           = {K_mean:.1f} nm/V")
-    print(f"  τ           = {tau_mean*1000:.1f} ms")
-    print(f"  θ 总        = {theta_total_ms:.1f} ms")
-    print(f"    θ_piezo   = {theta_piezo_ms:.1f} ms  (机械延迟)")
-    print(f"    θ_protocol= {t_protocol_ms:.1f} ms  "
-          f"(Moku{t_moku_ms:.1f}ms + 串口/USB{t_frame_ms:.1f}ms)")
+    print(f"  τ           = {tau_mean*1e6:.1f} µs")
+    print(f"  θ 总        = {theta_total_us:.1f} µs")
+    print(f"    θ_piezo   = {theta_piezo_us:.1f} µs  (机械延迟)")
+    print(f"    θ_protocol= {t_protocol_us:.1f} µs  "
+          f"(Moku{t_moku_us:.1f}µs + 串口/USB{t_frame_us:.1f}µs)")
     print(f"  V_dead      = {v_dead:.2f} V")
     print(f"  R²          = {r2_mean:.4f}")
     print(f"  噪声        ≈ {noise_rms:.1f} nm RMS")

@@ -1,7 +1,7 @@
 function p = defaultParams()
 %DEFAULTPARAMS  Factory-default simulation parameters.
     p.K              = 410;    % nm/V  static gain
-    p.tau_ms         = 80;     % ms    time constant
+    p.tau_us         = 80000;  % µs    time constant
     p.theta_us       = 10000;  % µs    piezo mechanical dead time
     p.v_dead         = 0;      % V     dead-band voltage
     p.hysteresis_nm  = 0;      % nm    hysteresis offset

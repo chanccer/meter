@@ -248,7 +248,7 @@ PROTO_DELAY_REPS    = 10           # Repetitions for protocol delay measurement
 ADRC_WC             = 20.0         # Controller bandwidth ω_c (rad/s) — auto-set by IMC if model available
 ADRC_W0             = 100.0        # ESO bandwidth ω₀ (rad/s) — auto-set as 5·ω_c
 ADRC_K              = 410.0        # Plant gain fallback nm/V (used if identify_model() fails)
-ADRC_TAU_MS         = 80.0         # Plant time constant fallback (ms)
+ADRC_TAU_US         = 80000.0      # Plant time constant fallback (µs)
 ADRC_SMITH          = True         # Enable Smith Predictor by default
 ```
 
@@ -411,13 +411,13 @@ Saved automatically after each temperature point when `STEP_IDENT_ENABLED = True
 |--------|-------------|
 | `temperature_C` | Temperature (°C) |
 | `K_nm_per_V` | Static gain (nm/V) |
-| `tau_ms` | Time constant (ms) |
-| `theta_ms` | Total dead time (ms) — θ_piezo + θ_protocol |
+| `tau_us` | Time constant (µs) |
+| `theta_us` | Total dead time (µs) — θ_piezo + θ_protocol |
 | `v_dead_V` | Dead-band voltage (V) — minimum voltage before Piezo moves |
 | `r2_fit` | FOPDT fit quality R² |
 | `noise_rms_nm` | Sensor noise RMS (nm, estimated from static LUT std_nm) |
-| `theta_piezo_ms` | Estimated Piezo-only mechanical delay (ms) |
-| `theta_protocol_ms` | Estimated protocol delay (ms) — Moku command + serial frame + USB |
+| `theta_piezo_us` | Estimated Piezo-only mechanical delay (µs) |
+| `theta_protocol_us` | Estimated protocol delay (µs) — Moku command + serial frame + USB |
 | `timestamp` | Identification time (ISO 8601) |
 
 ---
@@ -477,7 +477,7 @@ $$G(s) = \frac{K \, e^{-\theta s}}{\tau s + 1}$$
 | τ | s | Time constant — speed of the exponential approach to steady state (mechanical + electrical) |
 | θ | s | Total dead time — θ_piezo (mechanical lag) + θ_protocol (Moku command + serial frame + USB polling) |
 
-The script measures θ_protocol separately via `measure_protocol_delay()` (N repeated no-op Moku commands + frame arrival timing), then computes θ_piezo = θ_total − θ_protocol. Both are stored in the model CSV in milliseconds (`theta_piezo_ms`, `theta_protocol_ms`). To use them in the MATLAB simulation, multiply by 1000: set **θ_piezo (µs)** ← `theta_piezo_ms × 1000` and **θ_protocol (µs)** ← `theta_protocol_ms × 1000`. The **Load LUT** button does this automatically.
+The script measures θ_protocol separately via `measure_protocol_delay()` (N repeated no-op Moku commands + frame arrival timing), then computes θ_piezo = θ_total − θ_protocol. Both are stored in the model CSV in microseconds (`theta_piezo_us`, `theta_protocol_us`). The **Load LUT** button reads these columns and populates **θ_piezo (µs)** and **θ_protocol (µs)** directly.
 
 The corresponding step response (voltage jumps by ΔV at t = 0) is:
 
@@ -753,9 +753,9 @@ table(results)
 ```
 ┌─ Parameters (left, scrollable) ──────────────────┐
 │  Plant (Piezo)                                    │
-│    K  (nm/V)          [    410 ]                  │
-│    τ  (ms)            [     80 ]                  │
-│    θ_piezo (µs)       [  10000 ]                  │
+│    K  (nm/V)          [    350 ]                  │
+│    τ  (µs)            [     20 ]                  │
+│    θ_piezo (µs)       [    500 ]                  │
 │    V dead (V)         [      0 ]                  │
 │    Hysteresis (nm)    [      0 ]                  │
 │    Noise RMS (nm)     [      5 ]                  │
@@ -764,11 +764,13 @@ table(results)
 │    Kp  [ 0.002 ]  Ki  [ 0.027 ]  Kd  [ 0 ]       │
 │    D filter N    [     20 ]                       │
 │  ADRC                                             │
-│    ω_c (rad/s)   [     20 ]                       │
-│    ω₀  (rad/s)   [    100 ]                       │
+│    ω_c (rad/s)   [    500 ]                       │
+│    ω₀  (rad/s)   [   2000 ]                       │
 │    Smith Predictor [ Off ▼ ]                      │
 │  Feedback Delay                                   │
 │    θ_protocol (µs) [      0 ]                     │
+│  Simulation                                       │
+│    Controller DT (µs) [    1 ]                    │
 │  Setpoint / Disturbance / Simulation …            │
 └──────────────────────────────────────────────────┘
 ┌─ Plots + Metrics (right) ───────────────────────────────────────┐
@@ -798,9 +800,9 @@ All parameters are numeric input fields or drop-downs. Fields that belong to the
 
 | Section | Parameter | Default | Range |
 |---------|-----------|---------|-------|
-| Plant (Piezo) | K — static gain (nm/V) | 410 | 10–2000 |
-| Plant (Piezo) | τ — time constant (ms) | 80 | 5–500 |
-| Plant (Piezo) | θ_piezo — mechanical dead time (µs) | 10000 | 0–200000 |
+| Plant (Piezo) | K — static gain (nm/V) | 350 | 0–10 000 000 |
+| Plant (Piezo) | τ — time constant (µs) | 20 | 0–1 000 000 000 |
+| Plant (Piezo) | θ_piezo — mechanical dead time (µs) | 500 | 0–1 000 000 000 |
 | Plant (Piezo) | V dead (V) — dead-band voltage | 0 | 0–5 |
 | Plant (Piezo) | Hysteresis (nm) | 0 | 0–500 |
 | Plant (Piezo) | Noise RMS (nm) | 5 | 0–50 |
@@ -809,13 +811,14 @@ All parameters are numeric input fields or drop-downs. Fields that belong to the
 | Controller (PID) | Ki | 0.027 | 0–2.00 |
 | Controller (PID) | Kd | 0 | 0–0.10 |
 | Controller (PID) | D filter N | 20 | 0–200 |
-| ADRC | ω_c (rad/s) — controller bandwidth | 20 | 1–500 |
-| ADRC | ω₀ (rad/s) — ESO bandwidth | 100 | 1–2000 |
+| ADRC | ω_c (rad/s) — controller bandwidth | 500 | 0–1 000 000 000 |
+| ADRC | ω₀ (rad/s) — ESO bandwidth | 2000 | 0–1 000 000 000 |
 | ADRC | Smith Predictor — dead-time compensation | Off | Off / On |
-| Feedback Delay | θ_protocol (µs) — sensor + protocol latency | 0 | 0–50000 |
-| Setpoint | Base DC (nm) | 0 | 0–5000 |
-| Simulation | Duration (s) | 2.0 | 0.5–3600 |
-| Simulation | V max (V) | 5 | 0–1000 |
+| Feedback Delay | θ_protocol (µs) — sensor + protocol latency | 0 | 0–1 000 000 000 |
+| Setpoint | Base DC (nm) | 0 | −1 000 000 000–1 000 000 000 |
+| Simulation | Duration (s) | 2.0 | 0–1 000 000 |
+| Simulation | V max (V) | 20 | 0–1 000 000 |
+| Simulation | Controller DT (µs) | 1 | 0–1 000 000 000 |
 
 ### Setpoint generator
 
@@ -847,9 +850,21 @@ The **Disturbance** section uses the same waveform table schema (without `Step` 
 
 where $t' = t - t_\text{start}$ and $f = 1/\text{period}$.
 
+### Plot interactions
+
+The four subplots support independent mouse-driven zoom and pan. All X axes are linked — any time-axis change applies to all four plots simultaneously.
+
+| Gesture | Effect |
+|---------|--------|
+| Scroll wheel | Zoom X axis (time) — all 4 plots synchronized |
+| Shift + Scroll | Zoom Y axis of the hovered plot only |
+| Left-click drag | Pan — X shifts all plots; Y shifts hovered plot only |
+
+Scroll wheel zoom is active **only when the cursor is inside a plot**; scrolling over the parameter panel has no effect. After each simulation run the view resets to show the full time range.
+
 ### Simulation model
 
-The simulation engine uses a 1 ms plant integration step (Euler method) with a 50 ms controller update interval.
+The simulation engine uses a **1 µs plant integration step** (Euler method). The controller update interval is set by the **Controller DT (µs)** parameter (default 1 µs; increasing it reduces CPU cost for long simulations).
 
 **Plant** (first-order plus dead time with hysteresis):
 
@@ -894,7 +909,7 @@ The $\dot{r}$ term changes the closed-loop transfer function from $\omega_c/(s+\
 
 $$y_\text{eso} = y_\text{meas} + (y_\text{model} - y_\text{model,delayed})$$
 
-This removes θ_plant from the ESO's effective dead time, allowing a higher ω_c without instability. IMC Auto-tune automatically adjusts ω_c when Smith Predictor is On.
+This removes θ_plant from the ESO's effective dead time, allowing a higher ω_c without instability. **Toggling Smith Predictor automatically triggers IMC Auto-tune** so ω_c updates immediately (Off: ω_c ≈ 1921 rad/s for τ=20 µs, θ=500 µs; On: ω_c ≈ 48780 rad/s). The Run log also indicates `[Smith ON]` when Smith is active.
 
 **Tuning guidelines:**
 - Start with $\omega_c = 1/(\tau + \theta)$ and $\omega_0 = 5\,\omega_c$
@@ -909,8 +924,8 @@ After each simulation run, the metrics panel displays step-response quality meas
 | Metric | Definition |
 |--------|-----------|
 | Overshoot (%) | $(y_\text{peak} - y_\text{ref}) / \|y_\text{step}\| \times 100$ |
-| Rise time (ms) | Time from 10% to 90% of the step amplitude |
-| Settling time (ms) | Last time the output leaves the ±2% band |
+| Rise time (µs) | Time from 10% to 90% of the step amplitude |
+| Settling time (µs) | Last time the output leaves the ±2% band |
 | SS RMS error (nm) | RMS of tracking error over final 10% of simulation |
 | IAE (nm·s) | $\int_0^T \|e(t)\|\,dt$ — cumulative absolute error |
 | ITAE (nm·s²) | $\int_0^T t\,\|e(t)\|\,dt$ — weights late errors more heavily |
@@ -942,24 +957,24 @@ The file is human-readable JSON:
 
 ```json
 {
-  "K": 410,
-  "tau_ms": 80,
-  "theta_us": 8500,
-  "v_dead": 0.15,
-  "hysteresis_nm": 35.0,
-  "noise": 5,
+  "K": 350,
+  "tau_us": 20,
+  "theta_us": 500,
+  "v_dead": 0,
+  "hysteresis_nm": 0,
+  "noise": 0,
   "ctrl_mode": "ADRC",
-  "kp": 0.00217,
-  "ki": 0.02708,
+  "kp": 0.00066,
+  "ki": 0.04482,
   "kd": 0.0,
-  "d_filter_n": 20,
-  "adrc_wc": 20,
-  "adrc_w0": 100,
+  "d_filter_n": 9,
+  "adrc_wc": 500,
+  "adrc_w0": 2000,
   "smith_adrc": false,
-  "delay_us": 3800,
-  "dt_pid_us": 50000,
-  "sp_dc": 0,
-  "v_max": 5,
+  "delay_us": 0,
+  "dt_pid_us": 1,
+  "sp_dc": 1500,
+  "v_max": 20,
   "t_total": 2.0,
   "setpoints": [
     {"en": true, "type": "Step", "amp": 1000, "period": 1.0, "t0": 0.1, "dur": 0.0}
@@ -968,7 +983,7 @@ The file is human-readable JSON:
 }
 ```
 
-> **Backward compatibility:** Config files written by older versions that contain `theta_ms` (milliseconds) or `dt_pid_ms` are automatically migrated to `theta_us` / `dt_pid_us` (×1000) on load.
+> **Backward compatibility:** Config files written by older versions that contain `tau_ms` (milliseconds) are automatically converted to `tau_us` (×1000) on load. Same applies to `theta_ms` and `dt_pid_ms`.
 
 To reset to factory defaults: click **Reset** then **Save Config**, or simply delete `simulate_config.json`.
 

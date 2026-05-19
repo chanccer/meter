@@ -3,7 +3,7 @@ function saveConfig(configPath, p)
 
     try
         cfg.K             = p.K;
-        cfg.tau_ms        = p.tau_ms;
+        cfg.tau_us        = p.tau_us;
         cfg.theta_us      = p.theta_us;
         cfg.v_dead        = p.v_dead;
         cfg.hysteresis_nm = p.hysteresis_nm;

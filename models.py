@@ -33,13 +33,13 @@ class ModelParams:
 
     temperature_C: float
     K_nm_per_V: float
-    tau_ms: float
-    theta_ms: float
+    tau_us: float
+    theta_us: float
     v_dead_V: float
     r2_fit: float
     noise_rms_nm: float
-    theta_piezo_ms: float    = 0.0
-    theta_protocol_ms: float = 0.0
+    theta_piezo_us: float    = 0.0
+    theta_protocol_us: float = 0.0
     timestamp: str           = ""
 
     # ── 便捷属性（供控制器使用）──────────────────────────────────────
@@ -49,15 +49,15 @@ class ModelParams:
 
     @property
     def tau_s(self) -> float:
-        return self.tau_ms * 1e-3
+        return self.tau_us * 1e-6
 
     @property
     def theta_plant_s(self) -> float:
-        return self.theta_piezo_ms * 1e-3
+        return self.theta_piezo_us * 1e-6
 
     @property
     def theta_sensor_s(self) -> float:
-        return self.theta_protocol_ms * 1e-3
+        return self.theta_protocol_us * 1e-6
 
 
 @dataclass
