@@ -49,9 +49,9 @@ $$y(t) = \begin{cases} y_0 & t \le \theta \\ y_0 + K \cdot \Delta V \cdot \left(
 
 | 参数 | 初始猜值 | 搜索边界 |
 |------|----------|----------|
-| $K_0$ | $(y_\infty - y_0) / \Delta V$ | \[1, 5000\] nm/V |
-| $\tau_0$ | $t_{end} / 4$ | \[0.0001, 60\] s |
-| $\theta_0$ | $\min(0.02,\ t_{end}/10)$ | \[0, 10\] s |
+| $K_0$ | $(y_\infty - y_0) / \Delta V$ | [1, 5000] nm/V |
+| $\tau_0$ | $t_{end} / 4$ | [0.0001, 60] s |
+| $\theta_0$ | $\min(0.02,\ t_{end}/10)$ | [0, 10] s |
 
 拟合质量用 $R^2$ 评估；多次重复后对 $K$、$\tau$、$\theta$ 取算术平均值。
 
@@ -78,7 +78,7 @@ $$\theta_{piezo} = \max\bigl(0,\ \theta_{total} - \theta_{protocol}\bigr)$$
 
 IMC（内模控制，Internal Model Control）要求输入**闭环中所有延迟来源之和**，而不仅是植物死时间。
 
-$$\boxed{\theta_{eff} = \theta_{plant} + \theta_{sensor} + \frac{DT_{controller}}{2}}$$
+$$\theta_{eff} = \theta_{plant} + \theta_{sensor} + \frac{DT_{controller}}{2}$$
 
 | 延迟项 | 来源 | 代码字段 |
 |--------|------|----------|
@@ -86,7 +86,7 @@ $$\boxed{\theta_{eff} = \theta_{plant} + \theta_{sensor} + \frac{DT_{controller}
 | $\theta_{sensor}$ | 传感器/协议反馈延迟 | `p.delay_us` / `theta_sensor_s` |
 | $DT/2$ | 离散控制器的 ZOH 等效延迟 | `p.dt_pid_us / 2` |
 
-**为什么 $DT/2$？**  
+**为什么是 $DT/2$？**  
 一个周期为 $DT$ 的零阶保持（ZOH）离散控制器，平均在每个采样周期的中点才"反应"到误差，等效于在连续系统中引入了 $DT/2$ 的额外纯滞后（Åström & Hägglund 1995，第 8 章）。
 
 ---
@@ -103,17 +103,21 @@ $\lambda$ 越大，响应越慢但鲁棒性越好；$\lambda$ 越小，响应越
 
 ### 4.2 增益公式
 
-$$d = \tau + \dfrac{\theta_{eff}}{2} \quad \text{（分母公因子）}$$
+定义分母公因子 $d$：
 
-$$\boxed{K_p = \frac{d}{K \cdot (\lambda + \theta_{eff}/2)}}$$
+$$d = \tau + \frac{\theta_{eff}}{2}$$
 
-$$\boxed{K_i = \frac{K_p}{d}}$$
+由此推导各增益：
 
-$$\boxed{K_d = K_p \cdot \frac{\tau \cdot \theta_{plant}}{2\tau + \theta_{plant}}}$$
+$$K_p = \frac{d}{K \cdot \left(\lambda + \dfrac{\theta_{eff}}{2}\right)}$$
 
-$$\boxed{N = \mathrm{round}\!\left(\frac{2\tau + \theta_{plant}}{\theta_{plant}}\right)} \quad \text{（微分滤波器截止频率倍数）}$$
+$$K_i = \frac{K_p}{d}$$
 
-**注意**：$K_d$ 和 $N$ 只用 $\theta_{plant}$（植物结构性零点），而不是 $\theta_{eff}$，因为微分项补偿的是植物的内在极零点，而非通信延迟。
+$$K_d = K_p \cdot \frac{\tau \cdot \theta_{plant}}{2\tau + \theta_{plant}}$$
+
+$$N = \mathrm{round}\left(\frac{2\tau + \theta_{plant}}{\theta_{plant}}\right)$$
+
+其中 $N$ 为微分滤波器截止频率倍数。**注意**：$K_d$ 和 $N$ 只用 $\theta_{plant}$（植物结构性零点），而不是 $\theta_{eff}$，因为微分项补偿的是植物的内在极零点，而非通信延迟。
 
 ### 4.3 离散 PID 实现（`control/pid.py`）
 
@@ -146,26 +150,28 @@ ZN 公式没有考虑离散控制器的 $DT/2$ 延迟，在高速采样系统中
 **扩展状态观测器（ESO）**：把"所有未建模动态 + 外部扰动"集总为一个可估计的状态 $z_2$（"总扰动"）：
 
 $$\dot{z}_1 = -2\omega_0 z_1 + z_2 + b_0 u + 2\omega_0 y$$
+
 $$\dot{z}_2 = -\omega_0^2 z_1 + \omega_0^2 y$$
 
-**控制律**（主动抵消扰动 + 比例控制）：
+**控制律**（主动抵消扰动 + 比例控制，含设定值微分前馈）：
 
-$$u_0 = \omega_c \cdot (r - z_1) + \dot{r} \quad \text{（含设定值微分前馈）}$$
-$$u = \frac{u_0 - z_2}{b_0} \quad \text{（抵消总扰动）}$$
+$$u_0 = \omega_c \cdot (r - z_1) + \dot{r}$$
 
-其中 $b_0 = K / \tau$ 是植物的已知增益参数。
+$$u = \frac{u_0 - z_2}{b_0}$$
+
+其中 $b_0 = K / \tau$ 是植物的已知增益参数，$u_0$ 中的 $\dot{r}$ 为设定值微分前馈，$z_2$ 的减除实现总扰动主动抵消。
 
 ### 5.2 带宽参数化设计
 
 ADRC 只有两个自由参数 $\omega_c$（控制器带宽）和 $\omega_0$（ESO 带宽），消除了 PID 三参数之间的耦合调试。整定规则：
 
-$$\theta_{eff,ADRC} = \begin{cases} \theta_{sensor} + DT/2 & \text{Smith Predictor 开启} \\ \theta_{plant} + \theta_{sensor} + DT/2 & \text{Smith Predictor 关闭} \end{cases}$$
+$$\theta_{eff,ADRC} = \begin{cases} \theta_{sensor} + DT/2 & \text{Smith ON} \\ \theta_{plant} + \theta_{sensor} + DT/2 & \text{Smith OFF} \end{cases}$$
 
-$$\boxed{\omega_c = \frac{1}{\tau + \theta_{eff,ADRC}}}$$
+$$\omega_c = \frac{1}{\tau + \theta_{eff,ADRC}}$$
 
-$$\boxed{\omega_0 = 5 \cdot \omega_c}$$
+$$\omega_0 = 5 \cdot \omega_c$$
 
-直觉理解：$\omega_c$ 由系统最慢的动态（$\tau + 总延迟$）决定；$\omega_0 = 5\omega_c$ 确保 ESO 收敛速度比控制带宽快 5 倍，在观测精度和噪声放大之间取得平衡。
+直觉理解：$\omega_c$ 由系统最慢的动态（$\tau$ + 总延迟）决定；$\omega_0 = 5\omega_c$ 确保 ESO 收敛速度比控制带宽快 5 倍，在观测精度和噪声放大之间取得平衡。
 
 ---
 
@@ -173,11 +179,11 @@ $$\boxed{\omega_0 = 5 \cdot \omega_c}$$
 
 ### 6.1 原理
 
-Smith Predictor 并联运行一个**无纯滞后**的 FOPDT 模型（Euler 积分，步长 1 ms），并维护一段延迟缓冲区：
+Smith Predictor 并联运行一个**无纯滞后**的 FOPDT 模型（Euler 积分，步长 1 µs），并维护一段延迟缓冲区：
 
 ```
 Smith 修正量 = y_model_now − y_model_{θ_plant 步前}
-ESO 输入 = y_meas + Smith 修正量
+ESO 输入    = y_meas + Smith 修正量
 ```
 
 通过这个修正，ESO "看到"的输出仿佛没有 $\theta_{plant}$ 的延迟，因此可以使用更高的 $\omega_0$。
@@ -188,8 +194,8 @@ ESO 输入 = y_meas + Smith 修正量
 
 |  | $\theta_{eff,ADRC}$ | $\omega_c$ |
 |--|---------------------|------------|
-| Smith 关闭 | $5 + 0 + 0.5 = 5.5\ \mu s$ | $\approx 48{,}000$ rad/s |
-| Smith 开启 | $0 + 0.5 = 0.5\ \mu s$ | $\approx 484{,}000$ rad/s |
+| Smith 关闭 | $5 + 0 + 0.5 = 5.5\ \mu s$ | $\approx 48{,}000\ \text{rad/s}$ |
+| Smith 开启 | $0 + 0.5 = 0.5\ \mu s$ | $\approx 484{,}000\ \text{rad/s}$ |
 
 Smith Predictor 消除 $\theta_{plant}$ 后，可用带宽大幅提升（约 10×），但代价是依赖模型精度——若 $K$、$\tau$、$\theta_{plant}$ 估计偏差大，修正量会引入误差。
 
@@ -207,19 +213,21 @@ $$\dot{\mathbf{z}} = A_c \mathbf{z} + B_c \begin{bmatrix} u \\ y \end{bmatrix}$$
 
 $$A_c = \begin{bmatrix} -2\omega_0 & 1 \\ -\omega_0^2 & 0 \end{bmatrix}, \quad B_c = \begin{bmatrix} b_0 & 2\omega_0 \\ 0 & \omega_0^2 \end{bmatrix}$$
 
-对输入 $[u,\ y]^T$ 做零阶保持（ZOH）精确离散化，需要构造增广矩阵：
+对输入 $[u,\ y]^T$ 做零阶保持（ZOH）精确离散化，构造增广矩阵：
 
-$$M_{aug} = \begin{bmatrix} A_c & B_c \\ 0_{2\times2} & 0_{2\times2} \end{bmatrix} \in \mathbb{R}^{4\times4}$$
+$$M_{aug} = \begin{bmatrix} A_c & B_c \\ 0 & 0 \end{bmatrix} \in \mathbb{R}^{4\times4}$$
 
-$$\Phi = e^{M_{aug} \cdot DT} \quad \text{（矩阵指数，scipy.linalg.expm）}$$
+$$\Phi = e^{M_{aug} \cdot DT}$$
 
-$$A_d = \Phi_{[0:2,\ 0:2]}, \quad B_d = \Phi_{[0:2,\ 2:4]}$$
+（矩阵指数由 `scipy.linalg.expm` 计算，与 MATLAB `expm(Maug*DT_PID)` 数值等价。）
+
+提取离散矩阵：$A_d$ 为 $\Phi$ 左上 2×2 子块，$B_d$ 为右上 2×2 子块（对应 Python 切片 `Phi[:2, :2]` 和 `Phi[:2, 2:4]`）。
 
 离散递推（`ADRCController.update`）：
 
 $$\mathbf{z}[k+1] = A_d \mathbf{z}[k] + B_d \begin{bmatrix} v[k] \\ y[k] \end{bmatrix}$$
 
-使用矩阵指数而非欧拉近似的原因：当 $\omega_0 \cdot DT$ 较大时（高带宽、慢采样），欧拉法会产生数值不稳定；`expm` 保证精确匹配连续时间极点，与 MATLAB 的 `expm(Maug*DT_PID)` 数值逐比特等价。
+使用矩阵指数而非欧拉近似的原因：当 $\omega_0 \cdot DT$ 较大时（高带宽、慢采样），欧拉法会产生数值不稳定；`expm` 保证精确匹配连续时间极点。
 
 ---
 
@@ -320,7 +328,9 @@ $$\omega_c = \frac{1}{\tau + \theta_{eff,ADRC}}, \quad \omega_0 = 5\omega_c, \qu
 
 ### ESO 离散化
 
-$$\Phi = \exp\!\left(\begin{bmatrix} A_c & B_c \\ 0 & 0 \end{bmatrix} DT\right), \quad A_d = \Phi_{[0:2,0:2]}, \quad B_d = \Phi_{[0:2,2:4]}$$
+$$\Phi = \exp\left(\begin{bmatrix} A_c & B_c \\ 0 & 0 \end{bmatrix} DT\right)$$
+
+其中 $A_d = \Phi[:2,\ :2]$，$B_d = \Phi[:2,\ 2:]$（Python 切片符号）。
 
 ### ZN 备选（仅 PID）
 

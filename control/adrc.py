@@ -25,7 +25,7 @@ ESO（连续时间）：
 
 Smith Predictor（可选）：
     并联运行无时延的 FOPDT 模型：
-        ẏ_model = (K·u_eff - y_model) / τ     (Euler, 1ms 步长)
+        ẏ_model = (K·u_eff - y_model) / τ     (Euler, 1µs 步长)
     y_eso = y_meas + (y_model_now - y_model_θ_ago)
     消除植物纯滞后对 ESO 的影响，允许更高带宽。
 """
@@ -151,7 +151,7 @@ class SmithPredictor:
         tau_s: float,
         theta_plant_s: float,
         v_dead: float = 0.0,
-        dt_int: float = 1e-3,
+        dt_int: float = 1e-6,
     ) -> None:
         self.K       = K
         self.tau     = tau_s
