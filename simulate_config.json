@@ -10,9 +10,9 @@
   "ki": 0.044817927170868348,
   "kd": 1.4690320572673511E-7,
   "d_filter_n": 9,
-  "adrc_wc": 39215.686274509811,
-  "adrc_w0": 196078.43137254906,
-  "smith_adrc": false,
+  "adrc_wc": 48780.487804878059,
+  "adrc_w0": 243902.4390243903,
+  "smith_adrc": true,
   "delay_us": 0,
   "sp_dc": 1500,
   "v_max": 20,
@@ -43,7 +43,7 @@
   ],
   "signals": [
     {
-      "en": false,
+      "en": true,
       "type": "Sine",
       "amp": 500,
       "period": 4,
