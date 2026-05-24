@@ -171,7 +171,7 @@ def run_pid_control(
             )
             logger.debug(
                 f"[PID] iter={iteration} V={v_current:.4f}V pos={pos_nm:.1f}nm "
-                f"err={error_nm:+.1f}nm dt={dt*1000:.1f}ms"
+                f"err={error_nm:+.1f}nm dt={dt*1e6:.1f}µs"
             )
 
             if converge_count >= cfg.pid_converge_count:

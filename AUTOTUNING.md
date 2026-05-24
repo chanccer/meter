@@ -190,12 +190,12 @@ ESO 输入    = y_meas + Smith 修正量
 
 ### 6.2 对带宽的量化影响
 
-以典型参数为例（$\tau = 20\ \mu s,\ \theta_{plant} = 5\ \mu s,\ \theta_{sensor} = 0,\ DT = 1\ \mu s$）：
+以典型参数为例（$\tau = 20$ µs、$\theta_{plant} = 5$ µs、$\theta_{sensor} = 0$、$DT = 1$ µs）：
 
 |  | $\theta_{eff,ADRC}$ | $\omega_c$ |
 |--|---------------------|------------|
-| Smith 关闭 | $5 + 0 + 0.5 = 5.5\ \mu s$ | $\approx 48{,}000\ \text{rad/s}$ |
-| Smith 开启 | $0 + 0.5 = 0.5\ \mu s$ | $\approx 484{,}000\ \text{rad/s}$ |
+| Smith 关闭 | $5 + 0 + 0.5 = 5.5$ µs | $\approx 48{,}000$ rad/s |
+| Smith 开启 | $0 + 0.5 = 0.5$ µs | $\approx 484{,}000$ rad/s |
 
 Smith Predictor 消除 $\theta_{plant}$ 后，可用带宽大幅提升（约 10×），但代价是依赖模型精度——若 $K$、$\tau$、$\theta_{plant}$ 估计偏差大，修正量会引入误差。
 

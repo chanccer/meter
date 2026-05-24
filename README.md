@@ -587,8 +587,8 @@ PID 自动整定（阶跃响应法）
 ────────────────────────────────────────
 模型识别结果（FOPDT）：
   增益     K  = 409.4 nm/V
-  时间常数 τ  = 80.2 ms
-  纯滞后   θ  = 10.0 ms
+  时间常数 τ  = 19.7 µs
+  纯滞后   θ  = 4.9 µs
 
 整定结果（IMC）：
   Kp = 0.002171 V/nm
@@ -783,7 +783,7 @@ table(results)
 │  [▶ Run] [IMC/ADRC Auto-tune] [Auto-tune+Run] [Reset] [Load LUT]│
 │  [Export…] [Save Config] [Dist on Error ☐]                      │
 │  ┌── Step Response Metrics ────────────────────────────────┐    │
-│  │  Overshoot: 0.0%   Rise: 120 ms   Settling: 250 ms      │    │
+│  │  Overshoot: 0.0%   Rise: 120 µs   Settling: 250 µs      │    │
 │  │  SS RMS: 0.8 nm    IAE: 12.3 nm·s   ITAE: 8.4 nm·s²    │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │  ┌── Log ──────────────────────────────────────────────────┐    │

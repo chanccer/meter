@@ -155,7 +155,7 @@ def run_trajectory_control(
     print("ADRC 轨迹跟踪")
     print(f"{'=' * 40}")
     print(f"波形     : {waveform}  f={freq_hz:.3f}Hz  A=±{amp_nm:.0f}nm  中心={offset_nm:.0f}nm")
-    print(f"时长     : {duration_s:.1f}s  ({N} 步 × {dt*1000:.0f}ms)")
+    print(f"时长     : {duration_s:.1f}s  ({N} 步 × {dt*1e6:.1f}µs)")
     print(f"ADRC{smith_tag}  ωc={wc:.1f} rad/s  ω₀={w0:.1f} rad/s")
     print(f"植物模型 : K={K:.0f}nm/V  τ={tau_s*1e6:.1f}µs  θ_p={theta_plant_s*1e6:.1f}µs")
     if generator.bandwidth_warning:

@@ -53,7 +53,7 @@ $$\Delta d(t) \approx \gamma \cdot d_0 \cdot \log\!\left(1 + \frac{t}{t_0}\right
 
 $$\tau = R_{\text{src}} \cdot C_{\text{piezo}}$$
 
-典型值为数十毫秒量级（本系统辨识结果约 80 ms），限制了系统的动态响应带宽。
+典型值为数十微秒量级（本系统辨识结果约 20 µs），限制了系统的动态响应带宽。
 
 ---
 
@@ -70,8 +70,8 @@ $$G(s) = \frac{K \cdot e^{-\theta s}}{\tau s + 1}$$
 | 参数 | 物理意义 | 典型值 |
 |------|----------|--------|
 | $K$ | 静态增益（nm/V） | ~410 nm/V |
-| $\tau$ | 时间常数（机械+电气综合效应） | ~80 ms |
-| $\theta$ | 纯滞后（协议延迟 + 机械延迟） | ~4 ms |
+| $\tau$ | 时间常数（机械+电气综合效应） | ~20 µs |
+| $\theta$ | 纯滞后（协议延迟 + 机械延迟） | ~5 µs |
 
 FOPDT 只有三个参数，可从单次阶跃响应中稳健辨识，且在整定 PID/ADRC 时有成熟的解析公式直接可用。更重要的是，对于低频定位任务（带宽远低于 $1/\tau$），FOPDT 已能充分描述系统的响应特征。
 
@@ -228,16 +228,16 @@ $$u = \frac{u_0 - \hat{z}_2}{b_0}$$
 
 ADRC 有两个核心带宽参数：
 
-- $\omega_c$（控制带宽）：决定闭环响应速度，受限于传感器噪声和执行器饱和。对于 τ ≈ 80 ms 的压电系统，$\omega_c \approx 1/(\tau + \theta_{\text{eff}})$ 是 IMC 给出的推荐值
+- $\omega_c$（控制带宽）：决定闭环响应速度，受限于传感器噪声和执行器饱和。对于 τ ≈ 20 µs 的压电系统，$\omega_c \approx 1/(\tau + \theta_{\text{eff}})$ 是 IMC 给出的推荐值
 - $\omega_0$（ESO 带宽）：决定扰动估计的跟踪速度，通常取 $\omega_0 = 5\omega_c$。$\omega_0$ 过小则扰动估计滞后，过大则放大噪声
 
 **两者的权衡**：$\omega_0$ 必须远大于被估计扰动的变化频率，但又不能大到将传感器噪声放大进控制量。在压电定位中，蠕变和迟滞的变化频率远低于 $\omega_0$，因此估计效果良好。
 
 ### 5.5 ZOH 精确离散化
 
-控制循环在数字计算机上以固定步长 $\Delta t = 50$ ms 运行，ESO 的连续方程必须离散化。
+控制循环在数字计算机上以固定步长 $\Delta t = 1$ µs 运行，ESO 的连续方程必须离散化。
 
-**为什么不用欧拉法**：欧拉前向离散化的稳定条件是 $\omega_0 \Delta t < 2$。当 $\omega_0 = 50$ rad/s、$\Delta t = 0.05$ s 时，$\omega_0 \Delta t = 2.5 > 2$，欧拉法**直接不稳定**。
+**为什么不用欧拉法**：欧拉前向离散化存在一阶截断误差，当 $\tau / \Delta t$ 较小时（本系统 $\tau \approx 20\,\Delta t$），每步相对误差约为 $O((\Delta t/\tau)^2) \approx 0.25\%$，累积后会使 ESO 极点偏离设计值，导致实际带宽与整定值不符。更激进的配置（更大 $\omega_0$ 或更慢采样）还可能直接违反欧拉稳定条件 $\omega_0 \Delta t < 2$。
 
 **ZOH（零阶保持）精确离散化**：将 ESO 的矩阵微分方程写成增广形式：
 
@@ -273,7 +273,7 @@ $$G_{\text{eff}}(s) = G_0(s) \cdot e^{-\theta_s s}$$
 
 ### 6.3 何时开启 Smith Predictor
 
-当 $\theta_{\text{plant}}/\tau$ 比值较大时，Smith Predictor 效益显著。对于本系统（$\theta_{\text{plant}} \approx 1$ ms，$\tau \approx 80$ ms），比值约为 1.25%，Smith 补偿的提升有限，但对于延迟更大的器件（如通过长电缆驱动的压电，或热控场景），则相当重要。
+当 $\theta_{\text{plant}}/\tau$ 比值较大时，Smith Predictor 效益显著。对于本系统（$\theta_{\text{plant}} \approx 5$ µs，$\tau \approx 20$ µs），比值约为 25%，Smith 补偿可使可用带宽提升约 10 倍（详见 AUTOTUNING.md §6.2）。
 
 ---
 
