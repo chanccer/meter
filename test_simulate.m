@@ -521,7 +521,7 @@ classdef test_simulate < matlab.unittest.TestCase
         end
     end
 
-    % ================================================================== dt_pid_ms + smith_adrc persistence
+    % ================================================================== dt_pid_us + smith_adrc persistence
     methods (Test)
         function test_saveLoad_dt_pid_us(tc)
             tmp = [tempname '.json'];
@@ -541,30 +541,6 @@ classdef test_simulate < matlab.unittest.TestCase
             p1 = sim.loadConfig(tmp);
             delete(tmp);
             tc.assertEqual(p1.theta_us, 7500, 'AbsTol', 1e-9, 'theta_us roundtrip');
-        end
-
-        function test_loadConfig_backwardCompat_theta_ms(tc)
-            % Old configs that stored theta_ms (ms) must be auto-converted to theta_us (µs)
-            tmp = [tempname '.json'];
-            cfg = struct('K',410,'tau_ms',80,'theta_ms',15,'v_max',5, ...  % old ms format
-                         't_total',2,'ctrl_mode','PID');
-            fid = fopen(tmp,'w');  fprintf(fid,'%s',jsonencode(cfg));  fclose(fid);
-            p = sim.loadConfig(tmp);
-            delete(tmp);
-            tc.assertEqual(p.tau_us,   80000, 'AbsTol', 1e-9, 'tau_ms=80 should become tau_us=80000');
-            tc.assertEqual(p.theta_us, 15000, 'AbsTol', 1e-9, 'theta_ms=15 should become theta_us=15000');
-        end
-
-        function test_loadConfig_backwardCompat_dt_pid_ms(tc)
-            % Old configs that stored dt_pid_ms (ms) must be auto-converted to dt_pid_us (µs)
-            tmp = [tempname '.json'];
-            cfg = struct('K',410,'tau_ms',80,'theta_ms',10,'dt_pid_ms',20,'v_max',5, ...
-                         't_total',2,'ctrl_mode','PID');
-            fid = fopen(tmp,'w');  fprintf(fid,'%s',jsonencode(cfg));  fclose(fid);
-            p = sim.loadConfig(tmp);
-            delete(tmp);
-            tc.assertEqual(p.dt_pid_us, 20000, 'AbsTol', 1e-9, ...
-                'dt_pid_ms=20 should become dt_pid_us=20000');
         end
 
         function test_saveLoad_smith_adrc(tc)

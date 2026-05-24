@@ -983,19 +983,15 @@ The file is human-readable JSON:
 }
 ```
 
-> **Backward compatibility:** Config files written by older versions that contain `tau_ms` (milliseconds) are automatically converted to `tau_us` (×1000) on load. Same applies to `theta_ms` and `dt_pid_ms`.
-
 To reset to factory defaults: click **Reset** then **Save Config**, or simply delete `simulate_config.json`.
 
 ### Delay decomposition and Load LUT
 
 When you load a `lut_*.csv` and a matching `model_*.csv` is present, the GUI automatically assigns:
-- **θ_piezo (µs)** ← `theta_piezo_ms × 1000` — mechanical-only Piezo delay
-- **θ_protocol (µs)** ← `theta_protocol_ms × 1000` — Moku command + serial frame + USB latency
+- **θ_piezo (µs)** ← `theta_piezo_us` — mechanical-only Piezo delay
+- **θ_protocol (µs)** ← `theta_protocol_us` — Moku command + serial frame + USB latency
 
 If a companion `summary_*.csv` is found, the GUI also reads `hysteresis_max_nm` (average across temperatures) and populates the **Hysteresis (nm)** field.
-
-If the model file lacks the decomposed columns (older format), `theta_ms × 1000` (converted to µs) is placed into θ_piezo as a conservative fallback.
 
 ### Auto-tune formulas
 

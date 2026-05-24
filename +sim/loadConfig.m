@@ -15,17 +15,6 @@ function p = loadConfig(configPath)
                 p.(f) = double(cfg.(f));
             end
         end
-        % Backward compatibility: old configs stored delays/time in ms
-        if isfield(cfg, 'tau_ms') && ~isfield(cfg, 'tau_us')
-            p.tau_us = double(cfg.tau_ms) * 1000;
-        end
-        if isfield(cfg, 'theta_ms') && ~isfield(cfg, 'theta_us')
-            p.theta_us = double(cfg.theta_ms) * 1000;
-        end
-        if isfield(cfg, 'dt_pid_ms') && ~isfield(cfg, 'dt_pid_us')
-            p.dt_pid_us = double(cfg.dt_pid_ms) * 1000;
-        end
-
         if isfield(cfg, 'ctrl_mode') && ischar(cfg.ctrl_mode)
             p.ctrl_mode = cfg.ctrl_mode;
         end

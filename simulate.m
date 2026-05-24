@@ -461,20 +461,13 @@ fig.WindowButtonUpFcn     = @onMouseUp;
                         sK.Value   = clampV(row.K_nm_per_V, sK.Limits);
                         if ismember('tau_us', vars)
                             sTau.Value = clampV(row.tau_us, sTau.Limits);
-                        else
-                            sTau.Value = clampV(row.tau_ms * 1000, sTau.Limits);
                         end
 
                         if ismember('theta_piezo_us', vars) && ismember('theta_protocol_us', vars)
-                            sTh.Value  = clampV(row.theta_piezo_us,        sTh.Limits);
-                            sDel.Value = clampV(row.theta_protocol_us,     sDel.Limits);
+                            sTh.Value  = clampV(row.theta_piezo_us,    sTh.Limits);
+                            sDel.Value = clampV(row.theta_protocol_us, sDel.Limits);
                             thetaStr   = sprintf('θ_piezo=%.1fµs  θ_proto=%.1fµs', ...
                                          row.theta_piezo_us, row.theta_protocol_us);
-                        elseif ismember('theta_piezo_ms', vars) && ismember('theta_protocol_ms', vars)
-                            sTh.Value  = clampV(row.theta_piezo_ms * 1000, sTh.Limits);
-                            sDel.Value = clampV(row.theta_protocol_ms * 1000, sDel.Limits);
-                            thetaStr   = sprintf('θ_piezo=%.1fµs  θ_proto=%.1fµs', ...
-                                         row.theta_piezo_ms*1000, row.theta_protocol_ms*1000);
                         else
                             thetaStr  = sprintf('θ=%.1fµs (total)', row.theta_us);
                         end

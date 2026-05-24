@@ -982,8 +982,6 @@ JSON 文件可读性良好，可手动编辑或纳入版本控制：
 }
 ```
 
-> **向后兼容：** 旧版配置文件中的 `tau_ms`、`theta_ms`（毫秒）和 `dt_pid_ms` 字段在加载时自动乘以 1000 转换为 `tau_us` / `theta_us` / `dt_pid_us`（微秒）。
-
 恢复出厂默认值：点击 **重置** 后再点 **Save Config**，或直接删除 `simulate_config.json`。
 
 ### 延迟分解与 Load LUT 映射
@@ -994,7 +992,6 @@ JSON 文件可读性良好，可手动编辑或纳入版本控制：
   - **θ_piezo (µs)** ← `theta_piezo_us`（Piezo 机械延迟）
   - **θ_protocol (µs)** ← `theta_protocol_us`（Moku 命令 + 串口帧 + USB 延迟）
 - 若同名 `summary_*.csv` 存在，GUI 自动读取 `hysteresis_max_nm`（各温度均值）并填入 **Hysteresis (nm)** 字段
-- 若模型文件为旧格式（无延迟分解列），则将 `theta_ms × 1000`（转换为 µs）填入 θ_piezo 作为保守回退值
 
 ### 自动整定公式
 
