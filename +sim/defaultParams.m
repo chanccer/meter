@@ -14,7 +14,10 @@ function p = defaultParams()
     p.adrc_wc        = 20;     % rad/s controller bandwidth
     p.adrc_w0        = 100;    % rad/s ESO bandwidth
     p.smith_adrc     = 1;      % 1=Smith predictor ON, 0=standard ADRC
+    p.prev_kp        = 0.001;  % V/nm      Preview-mode PI trim (feedforward does the heavy lifting)
+    p.prev_ki        = 0.010;  % V/(nm·s)  Preview-mode PI trim integral gain
     p.delay_us       = 0;      % µs    sensor feedback delay
+    p.fs_sample_hz   = 1000;   % Hz    UMD2 sensor sampling rate (default 1kHz, adjustable e.g. 10kHz)
     p.sp_dc          = 0;      % nm    base DC setpoint
     % Nx6 cell {Enable, Type, Amp(nm), Period(s), Start(s), Dur(s)}
     % Dur = 0 → active from Start until end of simulation

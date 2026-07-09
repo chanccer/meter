@@ -16,11 +16,14 @@ function saveConfig(configPath, p)
         cfg.adrc_wc       = p.adrc_wc;
         cfg.adrc_w0       = p.adrc_w0;
         cfg.smith_adrc    = p.smith_adrc;
+        cfg.prev_kp       = p.prev_kp;
+        cfg.prev_ki       = p.prev_ki;
         cfg.delay_us      = p.delay_us;
         cfg.sp_dc         = p.sp_dc;
         cfg.v_max         = p.v_max;
         cfg.t_total       = p.t_total;
         cfg.dt_pid_us     = p.dt_pid_us;
+        cfg.fs_sample_hz  = p.fs_sample_hz;
         cfg.bw_enable     = p.bw_enable;
         cfg.bw_A          = p.bw_A;
         cfg.bw_beta       = p.bw_beta;

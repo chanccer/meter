@@ -724,13 +724,41 @@ simulate()
 
 需要 MATLAB R2023b 或更新版本（使用 `uifigure`、`uigridlayout`、`uitable`）。已在 MATLAB 2026a 上测试。
 
+### 无头模式（完全脱离图形界面）
+
+`simulate_headless.m` 运行完全相同的 FOPDT + PID/ADRC 仿真，但默认**不创建任何 `uifigure`/`figure`**——可在 `matlab -batch`、CI 或任何没有显示服务器的机器上安全运行。
+
+```matlab
+% 直接运行——使用默认参数，将指标打印到控制台，并返回结果结构体
+r = simulate_headless();
+
+% 参数覆盖（sim.defaultParams() 中的任意字段）+ 加载已保存的配置
+r = simulate_headless('ConfigFile', 'simulate_config.json', 'ctrl_mode', 'ADRC', 't_total', 1.0);
+
+% 导出时间序列和/或完整结果到磁盘，并关闭控制台输出
+r = simulate_headless('SaveCSV', 'out.csv', 'SaveMAT', 'out.mat', 'Verbose', false);
+
+% 可选导出图像（用 'Visible','off' 离屏渲染；不会弹出任何窗口）
+r = simulate_headless('Plot', 'png', 'PlotFile', 'result.png');
+```
+
+完全不启动 MATLAB 桌面，直接在命令行调用：
+
+```bash
+matlab -batch "simulate_headless('ConfigFile','simulate_config.json','SaveCSV','out.csv','Verbose',false)"
+```
+
+`r` 是一个结构体，字段包括 `t, yMeas, yTrue, vArr, errArr, distArr, spArr, dynMetrics, metricsText, statusMsg, params`。完整选项列表见 `help sim.runHeadless`。
+
 ### 文件结构
 
 ```
 simulate.m          — GUI 入口（调用 +sim 包函数）
+simulate_headless.m — 无 GUI 入口（封装 sim.runHeadless）
 +sim/
   defaultParams.m   — 工厂默认参数结构体
   runSim.m          — 离散时间 FOPDT 仿真循环（PID + ADRC）
+  runHeadless.m     — 无 GUI 仿真运行器（配置/参数覆盖、CSV/MAT/图像导出）
   makeSetpoint.m    — 目标轨迹波形发生器
   makeDisturbance.m — 干扰波形发生器
   computeMetrics.m  — 阶跃响应性能指标计算

@@ -11,7 +11,8 @@ classdef test_simulate < matlab.unittest.TestCase
             p = sim.defaultParams();
             required = {'K','tau_us','theta_us','v_dead','hysteresis_nm', ...
                         'noise','ctrl_mode','kp','ki','kd','d_filter_n', ...
-                        'adrc_wc','adrc_w0','smith_adrc','delay_us','sp_dc', ...
+                        'adrc_wc','adrc_w0','smith_adrc','prev_kp','prev_ki', ...
+                        'delay_us','sp_dc', ...
                         'setpoints','signals','v_max','t_total','dt_pid_us'};
             for i = 1:numel(required)
                 tc.assertTrue(isfield(p, required{i}), ...
@@ -151,6 +152,80 @@ classdef test_simulate < matlab.unittest.TestCase
             tc.assertFalse(any(isnan(yTrue)),  'NaN yTrue ADRC');
             tc.assertFalse(any(isnan(vArr)),   'NaN vArr ADRC');
             tc.assertFalse(any(isnan(errArr)), 'NaN errArr ADRC');
+        end
+    end
+
+    % ================================================================== runSim — Preview
+    methods (Test)
+        function test_runSim_Preview_outputDimensions(tc)
+            p = sim.defaultParams();
+            p.ctrl_mode = 'Preview';
+            p.t_total   = 0.5;
+            [t,yMeas,~,vArr,errArr,~,~] = sim.runSim(p);
+            n = numel(t);
+            tc.assertEqual(numel(yMeas),  n, 'yMeas Preview');
+            tc.assertEqual(numel(vArr),   n, 'vArr Preview');
+            tc.assertEqual(numel(errArr), n, 'errArr Preview');
+        end
+
+        function test_runSim_Preview_voltageWithinBounds(tc)
+            p = sim.defaultParams();
+            p.ctrl_mode = 'Preview';
+            p.t_total   = 1.0;
+            [~,~,~,vArr,~,~,~] = sim.runSim(p);
+            tc.assertTrue(all(vArr >= 0),       'Preview voltage < 0');
+            tc.assertTrue(all(vArr <= p.v_max), 'Preview voltage > v_max');
+        end
+
+        function test_runSim_Preview_noNaN(tc)
+            p = sim.defaultParams();
+            p.ctrl_mode = 'Preview';
+            p.t_total   = 1.0;
+            [~,yMeas,yTrue,vArr,errArr,~,~] = sim.runSim(p);
+            tc.assertFalse(any(isnan(yMeas)),  'NaN yMeas Preview');
+            tc.assertFalse(any(isnan(yTrue)),  'NaN yTrue Preview');
+            tc.assertFalse(any(isnan(vArr)),   'NaN vArr Preview');
+            tc.assertFalse(any(isnan(errArr)), 'NaN errArr Preview');
+        end
+
+        function test_runSim_Preview_exactModel_tracksBetterThanPID(tc)
+            % With an exactly-known FOPDT model and no noise, the preview
+            % inverse-model feedforward should track a step with
+            % substantially lower IAE than reactive PID (same plant/step).
+            pBase = sim.defaultParams();
+            pBase.noise     = 0;
+            pBase.t_total   = 1.0;
+            pBase.tau_us    = 20;
+            pBase.theta_us  = 5;
+            pBase.dt_pid_us = 50;
+
+            pPID = pBase;  pPID.ctrl_mode = 'PID';
+            pPV  = pBase;  pPV.ctrl_mode  = 'Preview';
+
+            [t1,~,yTrue1,~,errArr1,~,~] = sim.runSim(pPID);
+            [t2,~,yTrue2,~,errArr2,~,~] = sim.runSim(pPV); %#ok<ASGLU>
+
+            iaePID     = trapz(t1, abs(errArr1));
+            iaePreview = trapz(t2, abs(errArr2));
+            tc.assertLessThan(iaePreview, iaePID, ...
+                'Preview (known future setpoint) should out-track reactive PID on IAE');
+        end
+
+        function test_runSim_Preview_futureHorizon_needsLookahead(tc)
+            % Sanity check that the preview feedforward actually looks
+            % ahead: with theta_us=0, u_ff[k] should still use r[k+1]
+            % (one controller period of ZOH lookahead), not r[k] alone —
+            % i.e. the response should visibly lead a same-gain PID on a step.
+            p = sim.defaultParams();
+            p.noise     = 0;
+            p.ctrl_mode = 'Preview';
+            p.theta_us  = 0;
+            p.tau_us    = 20;
+            p.dt_pid_us = 50;
+            p.t_total   = 0.001;
+            [~,~,yTrue,vArr,~,~,~] = sim.runSim(p);
+            tc.assertFalse(any(isnan(vArr)), 'NaN with zero dead time');
+            tc.assertFalse(any(isnan(yTrue)), 'NaN yTrue with zero dead time');
         end
     end
 
@@ -630,6 +705,166 @@ classdef test_simulate < matlab.unittest.TestCase
             p1 = sim.loadConfig(tmp);
             delete(tmp);
             tc.assertTrue(isempty(p1.signals), 'Empty signals should round-trip as empty');
+        end
+    end
+
+    % ================================================================== fs_sample_hz (UMD2 sample rate)
+    methods (Test)
+        function test_defaultParams_fs_sample_hz(tc)
+            p = sim.defaultParams();
+            tc.assertTrue(isfield(p, 'fs_sample_hz'), 'Missing field: fs_sample_hz');
+            tc.assertEqual(p.fs_sample_hz, 1000, 'AbsTol', 1e-9, ...
+                'Default UMD2 sample rate should be 1 kHz');
+        end
+
+        function test_saveLoad_fs_sample_hz(tc)
+            tmp = [tempname '.json'];
+            p0 = sim.defaultParams();
+            p0.fs_sample_hz = 10000;
+            sim.saveConfig(tmp, p0);
+            p1 = sim.loadConfig(tmp);
+            delete(tmp);
+            tc.assertEqual(p1.fs_sample_hz, 10000, 'AbsTol', 1e-9, 'fs_sample_hz roundtrip');
+        end
+
+        function test_runSim_sampleHold_constantBetweenSamples(tc)
+            % Plant integration stays at 1 µs resolution, but yMeas must only
+            % refresh every 1/fs_sample_hz seconds (zero-order hold in between).
+            % The sample-and-hold counter leads the controller-tick counter by
+            % sBufLen steps (here 1, the floor for delay_us=0), so the first
+            % real sample lands at k=sampPeriod (not sampPeriod+1); before
+            % that yMeas holds its initial value. See +sim/runSim.m.
+            p = sim.defaultParams();
+            p.fs_sample_hz = 1000;   % 1 kHz → hold for 1000 plant steps (1 ms)
+            p.delay_us     = 0;
+            p.noise        = 3;
+            p.t_total      = 0.01;
+            [~, yMeas, ~, ~, ~, ~, ~] = sim.runSim(p);
+            % k=1000:1999 is a full post-cold-start hold window and must be
+            % bit-identical.
+            held = yMeas(1000:1999);
+            tc.assertEqual(numel(unique(held)), 1, ...
+                'yMeas should stay constant within one sample-and-hold window');
+            tc.assertNotEqual(yMeas(1999), yMeas(2000), ...
+                'yMeas must refresh once the hold window elapses');
+        end
+
+        function test_runSim_higherSampleRate_updatesMoreOften(tc)
+            % At 10x the sample rate, the hold window shrinks to 100 steps.
+            p = sim.defaultParams();
+            p.fs_sample_hz = 10000;  % 10 kHz → hold for 100 plant steps
+            p.delay_us     = 0;
+            p.noise        = 3;
+            p.t_total      = 0.01;
+            [~, yMeas, ~, ~, ~, ~, ~] = sim.runSim(p);
+            held = yMeas(100:199);
+            tc.assertEqual(numel(unique(held)), 1, ...
+                'yMeas should stay constant within the shorter 10 kHz hold window');
+            tc.assertNotEqual(yMeas(199), yMeas(200), ...
+                'yMeas must refresh once the 10 kHz hold window elapses');
+        end
+
+        function test_runSim_sampleAndControlTick_areAligned(tc)
+            % Regression test for a synchronization bug: the sample-and-hold
+            % counter and the controller-tick counter used to reach their
+            % thresholds at very different phases. With equal sample/control
+            % periods, that made the controller's tick always consume the
+            % *previous* period's sample (~1 full sample period stale, ~1 ms
+            % here) instead of a freshly acquired one -- silently doubling
+            % the intended ZOH-equivalent delay baked into +sim/imcTune.m's
+            % theta_eff formula. The sample-and-hold counter must instead
+            % lead the controller by exactly sBufLen steps, so staleness at
+            % the tick is bounded by the sensor transport delay, not a full
+            % sample period.
+            p = sim.defaultParams();
+            p.fs_sample_hz = 1000;
+            p.dt_pid_us    = 1000;   % same period as the sample rate
+            p.delay_us     = 0;      % sBufLen floors to 1 plant step (1 us)
+            p.noise        = 0;
+            p.t_total      = 0.01;
+            [~, yMeas, yTrue, ~, ~, ~, ~] = sim.runSim(p);
+            % At k=1001 (the controller's first tick), staleness must be at
+            % most a couple of plant steps (sensor transport delay), not
+            % anywhere near a full 1000-step sample period.
+            staleness = find(abs(yTrue - yMeas(1001)) < 1e-9, 1, 'last');
+            tc.assertNotEmpty(staleness, 'yMeas(1001) should match some recent yTrue sample');
+            tc.assertLessThan(1001 - staleness, 5, ...
+                'Sample-and-hold staleness at the controller tick must be a few plant steps, not a full sample period');
+        end
+    end
+
+    % ================================================================== runHeadless (no-GUI entry point)
+    methods (Test)
+        function test_runHeadless_noFiguresCreated(tc)
+            nBefore = numel(findall(0, 'Type', 'figure'));
+            r = sim.runHeadless('t_total', 0.2, 'Verbose', false); %#ok<NASGU>
+            nAfter = numel(findall(0, 'Type', 'figure'));
+            tc.assertEqual(nAfter, nBefore, ...
+                'Headless run must not create any figure/uifigure by default');
+        end
+
+        function test_runHeadless_resultStruct_requiredFields(tc)
+            r = sim.runHeadless('t_total', 0.2, 'Verbose', false);
+            required = {'t','yMeas','yTrue','vArr','errArr','distArr','spArr', ...
+                        'dynMetrics','metricsText','statusMsg','params'};
+            for i = 1:numel(required)
+                tc.assertTrue(isfield(r, required{i}), ...
+                    ['runHeadless result missing field: ' required{i}]);
+            end
+        end
+
+        function test_runHeadless_paramOverride(tc)
+            r = sim.runHeadless('K', 999, 't_total', 0.2, 'Verbose', false);
+            tc.assertEqual(r.params.K, 999, 'AbsTol', 1e-9, ...
+                'Name-value override should be applied to params');
+        end
+
+        function test_runHeadless_structArgOverride(tc)
+            p0 = sim.defaultParams();
+            p0.t_total = 0.2;
+            p0.ctrl_mode = 'ADRC';
+            r = sim.runHeadless(p0, 'Verbose', false);
+            tc.assertEqual(r.params.ctrl_mode, 'ADRC');
+        end
+
+        function test_runHeadless_configFile(tc)
+            tmpJson = [tempname '.json'];
+            p0 = sim.defaultParams();
+            p0.K = 777;
+            sim.saveConfig(tmpJson, p0);
+            r = sim.runHeadless('ConfigFile', tmpJson, 't_total', 0.2, 'Verbose', false);
+            delete(tmpJson);
+            tc.assertEqual(r.params.K, 777, 'AbsTol', 1e-9, ...
+                'ConfigFile should seed parameters');
+        end
+
+        function test_runHeadless_saveCSV(tc)
+            csvPath = [tempname '.csv'];
+            r = sim.runHeadless('t_total', 0.1, 'SaveCSV', csvPath, 'Verbose', false);
+            tc.assertTrue(isfile(csvPath), 'CSV file should be written');
+            tbl = readtable(csvPath);
+            delete(csvPath);
+            tc.assertEqual(height(tbl), numel(r.t), 'CSV row count must match t');
+        end
+
+        function test_runHeadless_saveMAT(tc)
+            matPath = [tempname '.mat'];
+            r = sim.runHeadless('t_total', 0.1, 'SaveMAT', matPath, 'Verbose', false);
+            tc.assertTrue(isfile(matPath), 'MAT file should be written');
+            mm = load(matPath, 't');
+            delete(matPath);
+            tc.assertEqual(numel(mm.t), numel(r.t), 'MAT t vector must match');
+        end
+
+        function test_runHeadless_plotExport_noLingeringFigure(tc)
+            pngPath = [tempname '.png'];
+            nBefore = numel(findall(0, 'Type', 'figure'));
+            sim.runHeadless('t_total', 0.2, 'Plot', 'png', 'PlotFile', pngPath, 'Verbose', false);
+            nAfter = numel(findall(0, 'Type', 'figure'));
+            tc.assertTrue(isfile(pngPath), 'PNG plot should be exported');
+            delete(pngPath);
+            tc.assertEqual(nAfter, nBefore, ...
+                'Plot figure must be closed after export, not left open');
         end
     end
 

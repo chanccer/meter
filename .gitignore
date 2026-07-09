@@ -14,3 +14,6 @@ hs_err_pid*.log
 
 # LUT output data
 lut_output/
+
+# macOS
+.DS_Store

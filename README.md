@@ -726,13 +726,41 @@ simulate()
 
 Requires MATLAB R2023b or later (uses `uifigure`, `uigridlayout`, `uitable`). Tested with MATLAB 2026a.
 
+### Headless Mode (no GUI)
+
+`simulate_headless.m` runs the exact same FOPDT + PID/ADRC simulation with **no `uifigure`/`figure` created at all** by default — safe for `matlab -batch`, CI, or any machine with no display server.
+
+```matlab
+% Plain run — defaults, prints metrics to console, returns a results struct
+r = simulate_headless();
+
+% Parameter overrides (any sim.defaultParams() field) + load a saved config
+r = simulate_headless('ConfigFile', 'simulate_config.json', 'ctrl_mode', 'ADRC', 't_total', 1.0);
+
+% Export the time series and/or the full result to disk, suppress console output
+r = simulate_headless('SaveCSV', 'out.csv', 'SaveMAT', 'out.mat', 'Verbose', false);
+
+% Optional plot export (rendered off-screen with 'Visible','off'; no window shown)
+r = simulate_headless('Plot', 'png', 'PlotFile', 'result.png');
+```
+
+Command line, with no MATLAB desktop at all:
+
+```bash
+matlab -batch "simulate_headless('ConfigFile','simulate_config.json','SaveCSV','out.csv','Verbose',false)"
+```
+
+`r` is a struct with fields `t, yMeas, yTrue, vArr, errArr, distArr, spArr, dynMetrics, metricsText, statusMsg, params`. See `help sim.runHeadless` for the complete option list.
+
 ### File structure
 
 ```
 simulate.m          — GUI entry point (calls +sim package functions)
+simulate_headless.m — headless entry point (no GUI; wraps sim.runHeadless)
 +sim/
   defaultParams.m   — factory-default parameter struct
   runSim.m          — discrete-time FOPDT simulation loop (PID + ADRC)
+  runHeadless.m     — no-GUI simulation runner (config/overrides, CSV/MAT/plot export)
   makeSetpoint.m    — setpoint waveform generator
   makeDisturbance.m — disturbance waveform generator
   computeMetrics.m  — step-response performance metrics

@@ -18,7 +18,8 @@ function simulate()
 %   ----------------
 %   Plant      : FOPDT  G(s) = K·exp(-θs) / (τs+1)
 %   Controller : Discrete-time PI with anti-windup
-%   Time steps : 1 µs plant integration (Euler), configurable controller DT
+%   Time steps : 1 µs plant integration (Euler), configurable UMD2 sensor
+%                sample rate (default 1 kHz) and controller DT
 %   Delays     : Circular buffers for plant dead time and feedback delay
 %   Setpoint   : Configurable waveform generator (Step/Sine/Square/…)
 %   Disturbance: Stackable waveform generator (Sine/Square/Sawtooth/…)
@@ -41,7 +42,7 @@ mainGL.ColumnSpacing = 6;
 
 % ------------------------------------------------------------------ LEFT panel
 leftPanel = uipanel(mainGL, 'Title','Parameters');
-NROWS = 36;
+NROWS = 37;
 rh = repmat({22}, 1, NROWS);
 rh{22} = 120;   % setpoint table
 rh{23} = 24;    % setpoint add/remove buttons
@@ -254,6 +255,7 @@ sectionLabel('Simulation');
 sTot  = mkField('Duration (s)',        0,    1e6,  p.t_total);
 sVmax = mkField('V max (V)',           0,    1e6,  p.v_max);
 sDT   = mkField('Controller DT (µs)', 0,    1e9,  p.dt_pid_us);
+sFs   = mkField('Sample Rate (Hz)',   1,    1e7,  p.fs_sample_hz);
 
 % ── Rows 31-36: Bouc-Wen Hysteresis ────────────────────────────────────────
 sectionLabel('Bouc-Wen Hysteresis');
@@ -318,6 +320,7 @@ fig.WindowButtonUpFcn     = @onMouseUp;
         p.v_max          = sVmax.Value;
         p.t_total        = sTot.Value;
         p.dt_pid_us      = sDT.Value;
+        p.fs_sample_hz   = sFs.Value;
         p.bw_enable      = strcmp(sBWen.Value, 'On');
         p.bw_A           = sBWA.Value;
         p.bw_beta        = sBWbeta.Value;
@@ -419,6 +422,7 @@ fig.WindowButtonUpFcn     = @onMouseUp;
         sTot.Value       = p0.t_total;
         sVmax.Value      = p0.v_max;
         sDT.Value        = p0.dt_pid_us;
+        sFs.Value        = p0.fs_sample_hz;
         sBWen.Value      = bwItems{1 + p0.bw_enable};
         sBWA.Value       = p0.bw_A;
         sBWbeta.Value    = p0.bw_beta;

@@ -1,7 +1,7 @@
 {
   "K": 350,
   "tau_us": 20,
-  "theta_us": 5,
+  "theta_us": 4,
   "v_dead": 0,
   "hysteresis_nm": 0,
   "noise": 0,
@@ -18,6 +18,7 @@
   "v_max": 20,
   "t_total": 2,
   "dt_pid_us": 1,
+  "fs_sample_hz": 1000,
   "bw_enable": false,
   "bw_A": 1,
   "bw_beta": 0.5,
@@ -36,7 +37,7 @@
       "en": true,
       "type": "Sine",
       "amp": 1000,
-      "period": 0.002,
+      "period": 0.0008,
       "t0": 0.1,
       "dur": 0
     }
@@ -45,24 +46,16 @@
     {
       "en": true,
       "type": "Sine",
-      "amp": 500,
-      "period": 4,
+      "amp": 300,
+      "period": 0.2,
       "t0": 0,
       "dur": 0
     },
     {
       "en": true,
       "type": "Sine",
-      "amp": 50,
-      "period": 0.2,
-      "t0": 0,
-      "dur": 0
-    },
-    {
-      "en": true,
-      "type": "Sawtooth",
-      "amp": 50,
-      "period": 0.2,
+      "amp": 400,
+      "period": 0.0033,
       "t0": 0,
       "dur": 0
     }

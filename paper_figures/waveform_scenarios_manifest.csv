@@ -1,0 +1,5 @@
+scenario,title,fs_sample_hz,dt_pid_us,theta_us,delay_us,tau_us,K_nm_per_V,v_max_V,amp_nm,dc_nm,t0_ms,normal_freq_Hz,limit_freq_Hz,PID_kp,PID_ki
+A_sampling_rate,Scenario A: sampling-rate bound,1000,10,0,0,20,410,5,300,1000,20,20,150,0.000526442888191258,1.93190050712388
+B_loop_rate,Scenario B: loop-rate bound,1000,50000,0,0,20,410,5,300,1000,200,2,11,0.00048857006217121,0.038259206121473
+C_feedback_delay,Scenario C: feedback-delay bound,10000,10,0,2000,20,410,5,300,1000,20,8,45,0.000497299863509584,0.474749273040176
+D_actuator_bandwidth,Scenario D: actuator-bandwidth bound,200000,1,0,0,20,410,5,800,1000,1,1000,17000,0.00699186991869919,325.20325203252
