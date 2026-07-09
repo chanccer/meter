@@ -17,3 +17,7 @@ lut_output/
 
 # macOS
 .DS_Store
+
+# Paper drafts (managed outside this repo, e.g. Overleaf)
+Journal_of_Scientific_Reports_Pizo_Control/
+Journal_of_Scientific_Reports_Pizo_Control_CN/
