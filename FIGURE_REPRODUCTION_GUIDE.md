@@ -71,7 +71,36 @@
 | `normal.sine` / `normal.square` | "正常带宽"测试频率下,正弦/方波各画几个周期 | 4 / 3 |
 | `limit.sine` / `limit.square` | "极限带宽"测试频率下,正弦/方波各画几个周期(通常要多几个周期才能看清瞬态) | 6 / 5 |
 
-### 2.4 `cfg.scenarios` —— 每个场景一个数组元素,按顺序渲染
+### 2.4 `cfg.waveformControllers` —— 图7–图10里对比哪些控制器、顺序如何
+
+这也是一个数组,`waveform_tracking_nature_all.m`/`_split.m` 按 `for i = 1:numel(...)`
+渲染成一列一个面板——**不是写死"PID在左、Preview在右"**,加/删/调换这里的元素,
+图上的列数和顺序就跟着变。默认三项:
+
+| 字段 | 含义 | 当前值 |
+|---|---|---|
+| `name` | 面板标题里显示的名字 | `'PID'` / `'ADRC'` / `'Preview'` |
+| `ctrl_mode` | 传给 `+sim/runSim.m` 的 `p.ctrl_mode` 字符串 | 同上 |
+| `lineStyle` | 该控制器那条曲线的线型 | `'-'` / `'--'` / `'-.'` |
+
+`name`/`ctrl_mode` 为 `'ADRC'` 的那一项,会在 `sc.hasADRC` 为 `false` 的场景(目前
+只有场景B)里被 `+sim/buildWaveformCols.m` 自动跳过——不需要手动为每个场景单独
+配置列表,已经在共享函数里处理好了。
+
+想加一个新控制器进对比(比如以后真的实现了别的算法):在这个数组里加一个元素,
+`ctrl_mode` 要跟 `+sim/runSim.m` 里 `strcmp(p.ctrl_mode, ...)` 认识的字符串一致;
+如果这个新控制器也需要额外整定(类似 PID 要算 kp/ki、ADRC 要算 wc/w0),去
+`+sim/buildWaveformCols.m` 的 `switch c.ctrl_mode` 里加一个 case。
+
+### 2.5 `cfg.scenarios(i).plotWindowFrac` —— 时域图 x 轴显示区间
+
+每个场景还有一个 `plotWindowFrac = [起始比例, 结束比例]`(默认 `[0 1]`),控制
+图7–图10 每个面板 x 轴实际显示仿真时长的哪一段:`[0 1]` 是从头到尾全部显示(和
+以前的固定行为一样),`[0.5 1]` 则只显示后一半、放大看细节。仿真本身还是跑
+全长(前面的瞬态过程仍然需要仿真出来让系统稳定),只是显示范围变了。改这个值
+只影响阶段4(时域图),不用重跑阶段1–3。
+
+### 2.6 `cfg.scenarios` —— 每个场景一个数组元素,按顺序渲染
 
 这是核心部分。`cfg.scenarios` 是一个结构体**数组**(不是固定的4个变量),六个
 下游脚本全部用 `for i = 1:numel(cfg.scenarios)` 循环渲染——数组有几个元素,
@@ -96,9 +125,10 @@
 | `sweepFreqHz` | 阶段1扫频用的频率点数组,通常是 `logspace(log10(下限), log10(上限), 点数)` | Hz 数组 |
 | `normalHz` | 时域波形图"正常工况"的测试频率 | Hz |
 | `limitHz` | 时域波形图"极限工况"(接近带宽上限)的测试频率 | Hz |
-| `hasADRC` | 这个场景要不要跑 ADRC+Smith 控制器做对比(场景B设为false,原因见下面"已知限制") | true/false |
+| `hasADRC` | 这个场景要不要跑 ADRC+Smith 控制器做对比(场景B设为false,原因见下面"已知限制")——同时也决定图7–图10里这个场景要不要出现 ADRC 那一列(见2.4) | true/false |
 | `poleAnalysis` | 这个场景要不要出现在表3(ADRC闭环极点分析)里 | true/false |
 | `ceilingType` | 图5里那条灰色理论带宽上限竖线怎么算,见下表 | 字符串标签 |
+| `plotWindowFrac` | 图7–图10 x 轴显示区间,见2.5 | `[起始比例 结束比例]`,默认 `[0 1]` |
 
 `ceilingType` 的四种取值(在 `bandwidth_sweep_nature.m` 里现算,不是存死的Hz数字):
 
@@ -114,9 +144,19 @@
 | 场景 | `fs_sample_hz` | `dt_pid_us` | `delay_us` | `tau_us` | `hasADRC` | `ceilingType` |
 |---|---|---|---|---|---|---|
 | A 采样率瓶颈 | 1000 | 10 | 0 | 20 | true | `nyquist_fs` |
-| B 环路更新率瓶颈 | 1000 | 50000 | 0 | 20 | **false**(见下方限制说明) | `nyquist_loop` |
+| B 环路更新率瓶颈 | 1000 | 1000 | 0 | 20 | true | `nyquist_loop` |
 | C 反馈延迟瓶颈 | 10000 | 10 | 2000 | 20 | true | `none` |
 | D 执行器带宽瓶颈 | 200000 | 1 | 0 | 20 | true | `actuator_bw` |
+
+**2026-07 修正**:场景B的 `dt_pid_us` 之前误设为50000(50ms,对应20Hz),注释里还错误地
+声称这"匹配真实硬件"——实际上真实硬件的控制环路更新率是1ms(1kHz),和传感器采样率
+`fs_sample_hz` 同一个物理时钟,两者锁在一起,没有独立的"环路变慢"这回事。已改成
+`dt_pid_us=1000`。这个修正顺带修好了一个之前记录在案的"已知限制":旧的50ms配置会让
+`b0*DT_PID≈1e6`,把 ADRC 的 ESO 离散化算法(`+sim/runSim.m` 里 `expm()` 那部分)推入
+数值病态区间导致控制器完全不收敛——`hasADRC` 因此被设成 `false`。换成真实的1ms后
+`b0*DT_PID≈2e4`,ADRC 数值上完全正常,`hasADRC` 也改回了 `true`。这个数值病态 bug
+本身还在(如果以后哪个场景真的把 `dt_pid_us` 设到比 `tau_us` 慢好几个数量级,还是会
+复现),只是当前四个场景都不会再触发它。
 
 ## 三、如何修改参数(手把手例子,已实测)
 
@@ -261,7 +301,7 @@ matlab -batch "adrc_pole_analysis"
 做的事:把 ESO 方程和真实一阶被控对象联立,对场景 A、C 求闭环三阶特征多项式的
 精确特征值,和渐近估计公式 $p_\text{slow}\approx -(25/11)\omega_c^2\tau$ 做对比,
 再和阶段1仿真出来的离散带宽(真值)做对比。分析哪些场景由 `+sim/analysisConfig.m`
-里每个场景的 `poleAnalysis` 布尔字段决定(目前是 A、C)。
+里每个场景的 `poleAnalysis` 布尔字段决定(目前是 A、B、C)。
 
 输出:`adrc_pole_table.csv` + 终端打印的极点/带宽对比表(对应论文表3的数字)。
 
@@ -343,14 +383,14 @@ matlab -batch "waveform_tracking_nature_split"   # 阶段4b，约50s
   重跑。
 - **报错 `Run bandwidth_sweep.m first -- ... not found`**:阶段2/3依赖阶段1的
   `bandwidth_sweep_results.csv`,还没生成或被删了,先跑 `bandwidth_sweep`。
-- **场景B(环路更新率瓶颈)没有 ADRC 曲线**:不是bug,是已知限制——场景B里
-  `tau_us=20µs` 但 `dt_pid_us=50000µs`(50ms),两者相差太悬殊,导致 ESO 的
-  精确 ZOH 离散化(`+sim/runSim.m` 里的 `expm()`)数值病态、控制器不收敛。
-  `+sim/analysisConfig.m` 里已经把 `s(2).hasADRC` 设为 `false` 规避这个问题,
-  论文的 Limitations 章节也说明了这一点。这不是"调参数能修好"的问题,是当前
-  ADRC 实现本身在极端参数比例下的数值局限。
-  实操中如果新加的场景也出现"仿真输出全 NaN"或长时间不收敛,大概率是同一类
-  数值病态,先检查 `tau_us` 和 `dt_pid_us` 是不是相差好几个数量级。
+- **某个场景的 ADRC 曲线完全不动、或长时间不收敛**:大概率是 `+sim/runSim.m`
+  里 ESO 精确 ZOH 离散化(`expm()`)的数值病态——当 `b0*DT_PID = (K/tau_us)*
+  dt_pid_us` 接近 `1e6` 量级时会出现,`tau_us` 比 `dt_pid_us` 快太多个数量级
+  就容易触发(2026-07之前场景B误配成 `dt_pid_us=50000` 时就是这样,已修正为
+  真实的1000,现在四个场景都不会触发)。这不是"调参数能修好"的问题,是当前
+  ADRC 实现本身在极端参数比例下的数值局限,论文 Limitations 章节也说明了这
+  一点。如果新加的场景又把 `dt_pid_us` 设得比 `tau_us` 慢好几个数量级,记得
+  把该场景的 `hasADRC` 设成 `false` 规避,而不是让仿真跑出一堆无意义的数字。
 - **改了 `fs_sample_hz`/`dt_pid_us`/`tau_us`,理论上限竖线却在图上消失了**:
   不是没生效,是竖线的新位置超出了图的 x 轴范围。`bandwidth_sweep_nature.m` 的
   x 轴范围跟着 `sweepFreqHz` 里实际测试到的最高频率走,理论上限一旦超过这个
@@ -381,6 +421,12 @@ matlab -batch "waveform_tracking_nature_split"   # 阶段4b，约50s
   全部。
 - **改时域波形的周期数、普通/极限测试频率**:改 `cfg.waveformCycles` 或
   `cfg.scenarios(i).normalHz`/`.limitHz`。只影响阶段4。
+- **改图7–图10对比哪些控制器、顺序**:改 `cfg.waveformControllers`(见2.4)——
+  不是写死"PID左、Preview右",加/删/调换数组元素,列数和顺序就跟着变;新控制器
+  如果需要额外整定逻辑,要去 `+sim/buildWaveformCols.m` 里加一个 `case`。只影响
+  阶段4。
+- **改图7–图10每个面板 x 轴显示的时间范围**:改 `cfg.scenarios(i).plotWindowFrac`
+  (见2.5),默认 `[0 1]`(全部显示)。只影响阶段4。
 - **加/删场景**(不限于四个):在 `cfg.scenarios` 里加/删一个元素,记得设置
   `hasADRC`/`poleAnalysis`/`ceilingType` 三个标志。下游全部脚本(扫频、极点分析、
   两张频域图、两张时域图)都是按 `numel(cfg.scenarios)` 循环渲染的,面板行列数、

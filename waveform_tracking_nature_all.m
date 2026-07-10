@@ -1,12 +1,20 @@
 %WAVEFORM_TRACKING_NATURE_ALL  Black-and-white, journal/LaTeX-style
-%   sine/square tracking figures (PID vs Preview, each plotted against the
-%   reference in its own panel) for ALL FOUR bandwidth-limiting scenarios
-%   defined in +sim/analysisConfig.m. Also saves the underlying
+%   sine/square tracking figures (one column per controller, each plotted
+%   against the reference in its own panel) for ALL FOUR bandwidth-limiting
+%   scenarios defined in +sim/analysisConfig.m. Also saves the underlying
 %   time-series data as CSV and a parameter manifest, so the figures are
 %   reproducible and citable when embedded in a paper.
 %
-%   Every scenario parameter and the PID tuning formula come from
-%   +sim/analysisConfig.m / +sim/tunedPID.m -- nothing here is hardcoded.
+%   Every scenario parameter and the PID/ADRC tuning formulas come from
+%   +sim/analysisConfig.m / +sim/tunedPID.m / +sim/tunedADRC.m -- nothing
+%   here is hardcoded. The controller list (which controllers appear, in
+%   what order/column) comes from cfg.waveformControllers -- NOT hardcoded
+%   to "PID left, Preview right": add/reorder/remove an entry there and
+%   this script follows. An 'ADRC' entry is skipped per-scenario when that
+%   scenario's hasADRC is false (numerically invalid, e.g. scenario B).
+%   The x-axis display window comes from cfg.scenarios(i).plotWindowFrac
+%   ([0 1] = full simulated span; e.g. [0.5 1] would show only the second
+%   half) -- also not hardcoded.
 %
 %   Each figure here combines normal- and limit-bandwidth panels in one
 %   8-panel overview. For separate normal-only / limit-only figures (one
@@ -44,17 +52,13 @@ for si = 1:numel(scenarios)
     pf = fieldnames(sc.params);
     for i = 1:numel(pf), p0.(pf{i}) = sc.params.(pf{i}); end
 
-    [kp, ki] = sim.tunedPID(p0);
-    pPID = p0; pPID.ctrl_mode='PID'; pPID.kp=kp; pPID.ki=ki; pPID.kd=0; pPID.d_filter_n=0;
-    pPV  = p0; pPV.ctrl_mode  = 'Preview';
-
     rows = struct([]);
     rows(1).wave='Sine';   rows(1).band='normal bandwidth'; rows(1).freq=sc.normalHz; rows(1).cycles=cfg.waveformCycles.normal.sine;
     rows(2).wave='Sine';   rows(2).band='limit bandwidth';  rows(2).freq=sc.limitHz;  rows(2).cycles=cfg.waveformCycles.limit.sine;
     rows(3).wave='Square'; rows(3).band='normal bandwidth'; rows(3).freq=sc.normalHz; rows(3).cycles=cfg.waveformCycles.normal.square;
     rows(4).wave='Square'; rows(4).band='limit bandwidth';  rows(4).freq=sc.limitHz;  rows(4).cycles=cfg.waveformCycles.limit.square;
 
-    cols = struct('name', {'PID','Preview'}, 'params', {pPID, pPV}, 'lineStyle', {'-','-.'});
+    cols = sim.buildWaveformCols(cfg, sc, p0);
 
     % Grid dimensions and figure size derive from numel(rows)/numel(cols)
     % rather than assuming exactly 4 rows x 2 cols -- adding a wave type,
@@ -84,7 +88,7 @@ for si = 1:numel(scenarios)
             hSp = plot(ax, t*1000, spArr, ':', 'Color', 'k', 'LineWidth', 0.8);
             hY  = plot(ax, t*1000, yTrue, cols(ci).lineStyle, 'Color', 'k', 'LineWidth', 1.0);
 
-            xlim(ax, [0, tTotal*1000]);
+            xlim(ax, sc.plotWindowFrac * tTotal * 1000);
             xlabel(ax, 'Time (ms)', 'FontName','Times New Roman', 'FontSize', 10);
             ylabel(ax, 'Displacement (nm)', 'FontName','Times New Roman', 'FontSize', 10);
             title(ax, sprintf('%s -- %s, %s (%g Hz)', cols(ci).name, rw.wave, rw.band, rw.freq), ...
@@ -121,6 +125,7 @@ for si = 1:numel(scenarios)
 
     fprintf('  Saved %s\n  Saved %s\n  Saved %s\n', pdfPath, pngPath, csvPath);
 
+    [kp, ki] = sim.tunedPID(p0);
     manifestRows(end+1,:) = {sc.name, sc.title, p0.fs_sample_hz, p0.dt_pid_us, p0.theta_us, ...
         p0.delay_us, p0.tau_us, p0.K, p0.v_max, sc.ampNm, sc.dcNm, sc.t0*1000, ...
         sc.normalHz, sc.limitHz, kp, ki}; %#ok<SAGROW>

@@ -30,6 +30,19 @@ function cfg = analysisConfig()
     cfg.waveformCycles.normal = struct('sine', 4, 'square', 3);
     cfg.waveformCycles.limit  = struct('sine', 6, 'square', 5);
 
+    % ---- controllers compared in the time-domain waveform figures ----
+    % (waveform_tracking_nature_all.m / _split.m). This is the ONLY place
+    % that lists which controllers appear and in what order -- the scripts
+    % render one column per entry here, so this is not hardcoded to
+    % "PID on the left, Preview on the right": reorder, add, or remove an
+    % entry and the figure follows. An entry whose ctrl_mode is 'ADRC' is
+    % automatically skipped for any scenario with hasADRC=false (see the
+    % per-scenario ADRC numerical-limitation note below).
+    cfg.waveformControllers = struct( ...
+        'name',      {'PID',  'ADRC', 'Preview'}, ...
+        'ctrl_mode', {'PID',  'ADRC', 'Preview'}, ...
+        'lineStyle', {'-',    '--',   '-.'});
+
     % ---- per-scenario definitions ----
     % ceilingType selects which formula computes the theoretical ceiling
     % plotted in the gain-vs-frequency figure:
@@ -41,6 +54,13 @@ function cfg = analysisConfig()
     % pole-analysis section of the paper (adrc_pole_analysis.m); it is a
     % scientific choice (which scenarios exhibit the "ADRC underperforms
     % PID" phenomenon worth explaining), not something to infer automatically.
+    % plotWindowFrac = [startFrac endFrac] sets which portion of each
+    % panel's simulated duration (0 = start of that row's simulation,
+    % 1 = tTotal for that row) is actually shown on the x-axis in the
+    % time-domain waveform figures -- e.g. [0.5 1] would zoom into just
+    % the second half instead of the whole simulated span. [0 1] (the
+    % default below) shows the full simulated range, matching the
+    % previous hardcoded behaviour.
 
     s = struct([]);
 
@@ -59,24 +79,30 @@ function cfg = analysisConfig()
     s(1).hasADRC      = true;
     s(1).poleAnalysis = true;
     s(1).ceilingType  = 'nyquist_fs';
+    s(1).plotWindowFrac = [0 1];
 
     s(2).name        = 'B_loop_rate';
-    s(2).label       = 'B. 环路更新率瓶颈 (真实硬件 dt=50ms -> 20Hz)';
+    s(2).label       = 'B. 环路更新率瓶颈 (真实硬件 dt=1ms -> 1kHz)';
     s(2).title       = 'Scenario B: loop-rate bound';
-    s(2).params      = struct('fs_sample_hz',1000, 'dt_pid_us',50000, ...
+    % Corrected 2026-07: the real hardware control loop actually runs at
+    % dt_pid_us=1000 (1kHz), matching fs_sample_hz -- NOT the 50ms/20Hz
+    % previously assumed here. At dt_pid_us=1000, ADRC+Smith is numerically
+    % well-conditioned (b0*DT_PID ~ 2e4, nowhere near the ~1e6 threshold
+    % that broke the ESO's exact-ZOH discretisation at the old 50ms value),
+    % so hasADRC is now true. Because dt_pid_us now equals fs_sample_hz's
+    % period, this scenario's loop-update-rate ceiling coincides with
+    % scenario A's sampling-rate ceiling -- see the paper's Results for the
+    % implication (the loop-update-rate is not an independent bottleneck on
+    % this hardware, only a hypothetical one if the loop were slower).
+    s(2).params      = struct('fs_sample_hz',1000, 'dt_pid_us',1000, ...
                                'theta_us',0, 'delay_us',0, 'tau_us',20);
-    s(2).ampNm        = 300;   s(2).dcNm = 1000;   s(2).t0 = 0.2;
-    s(2).sweepFreqHz  = logspace(log10(0.5), log10(15), 14);
-    s(2).normalHz     = 2;     s(2).limitHz = 11;
-    % ADRC+Smith is numerically invalid here: at tau_us=20 & dt_pid_us=50000,
-    % b0*DT_PID = (K/tau)*DT_PID ~ 1e6, which pushes the ESO's exact-ZOH
-    % discretisation (expm(Maug*DT_PID) in +sim/runSim.m) into numerical
-    % ill-conditioning and the controller fails to converge. This is a
-    % genuine limitation of the current ADRC implementation, not a config
-    % mistake -- see FIGURE_REPRODUCTION_GUIDE.md / the paper's Limitations.
-    s(2).hasADRC      = false;
-    s(2).poleAnalysis = false;
+    s(2).ampNm        = 300;   s(2).dcNm = 1000;   s(2).t0 = 0.02;
+    s(2).sweepFreqHz  = logspace(log10(5),   log10(700), 14);
+    s(2).normalHz     = 20;    s(2).limitHz = 150;
+    s(2).hasADRC      = true;
+    s(2).poleAnalysis = true;
     s(2).ceilingType  = 'nyquist_loop';
+    s(2).plotWindowFrac = [0 1];
 
     s(3).name        = 'C_feedback_delay';
     s(3).label       = 'C. 反馈延迟瓶颈 (delay\_us=2ms, theta\_protocol 式的传感器延迟)';
@@ -89,6 +115,7 @@ function cfg = analysisConfig()
     s(3).hasADRC      = true;
     s(3).poleAnalysis = true;
     s(3).ceilingType  = 'none';
+    s(3).plotWindowFrac = [0 1];
 
     s(4).name        = 'D_actuator_bandwidth';
     s(4).label       = 'D. 执行器本征带宽瓶颈 (tau=20us -> ~8kHz)';
@@ -101,6 +128,7 @@ function cfg = analysisConfig()
     s(4).hasADRC      = true;
     s(4).poleAnalysis = false;
     s(4).ceilingType  = 'actuator_bw';
+    s(4).plotWindowFrac = [0 1];
 
     cfg.scenarios = s;
 end

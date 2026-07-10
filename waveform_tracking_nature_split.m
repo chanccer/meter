@@ -5,11 +5,17 @@
 %   so a paper can cite "typical operating conditions" and "near the
 %   bandwidth limit" as two separate figures.
 %
-%   Every scenario parameter and the PID tuning formula come from
-%   +sim/analysisConfig.m / +sim/tunedPID.m -- nothing here is hardcoded.
+%   Every scenario parameter and the PID/ADRC tuning formulas come from
+%   +sim/analysisConfig.m / +sim/tunedPID.m / +sim/tunedADRC.m -- nothing
+%   here is hardcoded. The controller list (which controllers appear, in
+%   what order/column) comes from cfg.waveformControllers -- NOT hardcoded
+%   to "PID left, Preview right": add/reorder/remove an entry there and
+%   this script follows. An 'ADRC' entry is skipped per-scenario when that
+%   scenario's hasADRC is false. The x-axis display window comes from
+%   cfg.scenarios(i).plotWindowFrac ([0 1] = full simulated span).
 %
-%   Each figure is 4 panels (2x2): row 1 = Sine (PID | Preview), row 2 =
-%   Square (PID | Preview), labeled a-d.
+%   Each figure is (rows x cols) panels, one row per wave type (Sine,
+%   Square) and one column per entry in cfg.waveformControllers.
 %
 %   Output, all under paper_figures/:
 %     fig_waveform_<scenario>_normal.pdf/.png   4 panels, normal bandwidth
@@ -40,11 +46,7 @@ for si = 1:numel(scenarios)
     pf = fieldnames(sc.params);
     for i = 1:numel(pf), p0.(pf{i}) = sc.params.(pf{i}); end
 
-    [kp, ki] = sim.tunedPID(p0);
-    pPID = p0; pPID.ctrl_mode='PID'; pPID.kp=kp; pPID.ki=ki; pPID.kd=0; pPID.d_filter_n=0;
-    pPV  = p0; pPV.ctrl_mode  = 'Preview';
-
-    cols = struct('name', {'PID','Preview'}, 'params', {pPID, pPV}, 'lineStyle', {'-','-.'});
+    cols = sim.buildWaveformCols(cfg, sc, p0);
 
     for gi = 1:numel(regimes)
         rg = regimes(gi);
@@ -82,7 +84,7 @@ for si = 1:numel(scenarios)
                 hSp = plot(ax, t*1000, spArr, ':', 'Color', 'k', 'LineWidth', 0.8);
                 hY  = plot(ax, t*1000, yTrue, cols(ci).lineStyle, 'Color', 'k', 'LineWidth', 1.0);
 
-                xlim(ax, [0, tTotal*1000]);
+                xlim(ax, sc.plotWindowFrac * tTotal * 1000);
                 xlabel(ax, 'Time (ms)', 'FontName','Times New Roman', 'FontSize', 10);
                 ylabel(ax, 'Displacement (nm)', 'FontName','Times New Roman', 'FontSize', 10);
                 title(ax, sprintf('%s -- %s (%g Hz)', cols(ci).name, rw.wave, freq), ...
