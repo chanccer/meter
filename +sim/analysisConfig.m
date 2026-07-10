@@ -3,11 +3,13 @@ function cfg = analysisConfig()
 %   the bandwidth/preview analysis scripts (bandwidth_sweep.m,
 %   bandwidth_sweep_nature.m, bandwidth_sweep_phase_nature.m,
 %   adrc_pole_analysis.m, waveform_tracking_nature_all.m,
-%   waveform_tracking_nature_split.m). Nothing in those scripts should
-%   hardcode a scenario's fs/dt/theta/delay/tau, the plant gain/voltage
-%   limit/noise, the sweep frequencies, or an ADRC/PID gain — everything
-%   is either read from here, or computed at runtime from what's read
-%   from here (see +sim/tunedPID.m, +sim/tunedADRC.m).
+%   waveform_tracking_nature_split.m) and the simulated hardware-style demo
+%   figures (lut_sweep_nature.m, step_response_nature.m,
+%   convergence_nature.m). Nothing in those scripts should hardcode a
+%   scenario's fs/dt/theta/delay/tau, the plant gain/voltage limit/noise,
+%   the sweep frequencies, or an ADRC/PID gain — everything is either read
+%   from here, or computed at runtime from what's read from here (see
+%   +sim/tunedPID.m, +sim/tunedADRC.m).
 %
 %   To change how a scenario is defined, or add a fifth scenario, this is
 %   the only file that needs editing — every downstream script (and every
@@ -42,6 +44,64 @@ function cfg = analysisConfig()
         'name',      {'PID',  'ADRC', 'Preview'}, ...
         'ctrl_mode', {'PID',  'ADRC', 'Preview'}, ...
         'lineStyle', {'-',    '--',   '-.'});
+
+    % ---- LUT hysteresis sweep (lut_sweep_nature.m) ----
+    % Simulated bidirectional quasi-static voltage sweep through the
+    % Bouc-Wen hysteresis model in +sim/runSim.m (bw_enable branch).
+    % bw_D is chosen (not fit to any measured dataset) to produce a
+    % visually clear loop at this K/voltage-range scale -- this is
+    % simulated demonstration data, not a measurement, and is captioned
+    % as such.
+    cfg.lutSweep = struct( ...
+        'vStep',        0.1, ...   % V, sweep step size
+        'vMax',         5,   ...   % V, sweep upper bound (sweep runs 0->vMax->0)
+        'bw_A',         1.0, ...
+        'bw_beta',      0.5, ...
+        'bw_gamma',     0.5, ...
+        'bw_D',         100, ...   % nm, hysteresis loop-width scale
+        'settleCycles', 20);       % plant time constants to settle after each voltage step
+
+    % ---- step-response identification demo (step_response_nature.m) ----
+    % Simulates a voltage step through the (hysteresis-free) FOPDT plant,
+    % adds sensor noise, then fits K/tau/theta back out via fminsearch
+    % (no Optimization/Curve Fitting Toolbox required) to demonstrate that
+    % the identification procedure recovers the ground-truth parameters
+    % used elsewhere in this config, rather than claiming to identify an
+    % unknown real system.
+    cfg.stepResponse = struct( ...
+        'deltaV_V',    2,     ...  % V, step size
+        'noise_nm',    5,     ...  % nm RMS, simulated sensor noise
+        'tTotal_s',    1.5e-4, ... % s, total simulated duration (>> tau+theta)
+        'dt_s',        1e-6);      % s, sample period of the simulated step response
+
+    % ---- point-to-point convergence (convergence_nature.m) ----
+    % Simulates closed-loop PID and ADRC step responses to each target
+    % using the real dt_pid_us=1000 loop rate (matching scenario B) and
+    % the same Bouc-Wen hysteresis model as cfg.lutSweep, then counts
+    % controller ticks until the response enters and stays within bandNm
+    % of the target.
+    %
+    % Unlike the real-hardware Table 1, ADRC converges SLOWER than PID
+    % here (maxIter is set generously to actually capture its settling
+    % rather than clip it): ADRC's closed-loop bandwidth is lower than
+    % PID's at this loop rate under the shared theta_eff-based
+    % sim.tunedADRC() tuning (the same fact Tables 2/3 document from the
+    % frequency-domain side), whereas on the real hardware ADRC's
+    % advantage came from its Extended State Observer compensating actual
+    % hysteresis in real time -- a real-time disturbance-rejection benefit
+    % that a fixed, non-adaptive Bouc-Wen hysteresis model in simulation
+    % does not reproduce. Both figure and paper text report this
+    % difference honestly rather than re-tuning ADRC just to match the
+    % real-hardware ranking.
+    cfg.convergence = struct( ...
+        'targets_nm',  [500 1000 1500], ...
+        'bandNm',      5,     ...  % nm, convergence band (matches "SS RMS" band in Table 1)
+        'dt_pid_us',   1000,  ...  % matches the real hardware loop rate (scenario B)
+        'tau_us',      20,    ...
+        'theta_us',    5,     ...
+        'bw_enable',   true,  ...  % use the same Bouc-Wen hysteresis as cfg.lutSweep
+        'maxIter',     500,   ...  % ticks to allow before giving up (ADRC needs several hundred here)
+        'rmsCycles',   20);        % ticks used for the post-convergence steady-state RMS
 
     % ---- per-scenario definitions ----
     % ceilingType selects which formula computes the theoretical ceiling
